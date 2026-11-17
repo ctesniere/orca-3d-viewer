@@ -139,7 +139,7 @@ describe('source', () => {
     [/\bfetch\s*\(|XMLHttpRequest|WebSocket|EventSource|sendBeacon|RTCPeerConnection|importScripts/, 'opens a network channel'],
     [/window\.open\s*\(|location\s*\.\s*(href|assign|replace)|postMessage\s*\(/, 'navigates or messages another window'],
     [/localStorage|sessionStorage|indexedDB|document\.cookie/, 'keeps data beyond the open document'],
-    [/orca\??\.(host|shell|files)\b|applyEdit|\.session\s*\(/, 'calls Orca beyond reading the document'],
+    [/orca\??\.(host|shell|files)\b|applyEdit|\.session\s*\(|\.plugin\b/, 'calls Orca beyond reading the document'],
     [/new\s+(Shared)?Worker\b|serviceWorker/, 'starts code beside the page']
   ]
   // The one worker the viewer starts itself, and the only messages it passes: the model in, the verdict out.
@@ -147,6 +147,8 @@ describe('source', () => {
   const ALLOWED: Record<string, RegExp> = {
     'model-check.ts': /\bnew Worker\(workerUrl\)|\bworker\.postMessage\(\{ format, data \}\)/g,
     'model-check-worker.ts': /\bself\.postMessage\(/g,
+    // The one way the frame reaches the worker; the worker's own test pins what it will do.
+    'notes-send.ts': /\beditorFrame\(\)\?\.plugin\b/g,
     'viewer-preferences.ts': /\blocalStorage\.(getItem\(KEY\)|setItem\(KEY, JSON\.stringify\(preferences\)\))/g
   }
 
@@ -178,10 +180,14 @@ describe('source', () => {
 describe('manifest', () => {
   const manifest = JSON.parse(readFileSync(path.join(ROOT, 'orca-plugin.json'), 'utf8'))
 
-  it('asks Orca for no capability, worker or command, only sandboxed editors', () => {
-    assert.equal(manifest.execution, 'sandboxed-ui')
-    assert.deepEqual(manifest.capabilities, [])
-    assert.equal(manifest.main, undefined)
+  // Why exact: each capability is something the user is asked to approve, so adding one must be a decision made here.
+  it('asks Orca for exactly the four capabilities that sending a note to an agent needs, one worker and no command', () => {
+    assert.equal(manifest.execution, 'trusted-worker')
+    assert.equal(manifest.main, 'worker/index.ts')
+    assert.deepEqual(
+      manifest.capabilities.map((capability: { kind: string }) => capability.kind).sort(),
+      ['agent:launch', 'agent:read', 'terminal:send', 'workspace:read']
+    )
     assert.deepEqual(Object.keys(manifest.contributes), ['customEditors'])
   })
 

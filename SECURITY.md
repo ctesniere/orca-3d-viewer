@@ -23,7 +23,8 @@ The viewer opens files people did not write themselves, so a model is untrusted 
 
 - A model that makes the viewer run code, inject markup, or reach the network or file system
 - A model that crashes or hangs the viewer or Orca, or exhausts memory beyond Orca's 64 MiB file cap
-- The viewer writing to, or asking Orca for anything beyond reading, the open file
+- The viewer writing to the open file, or asking Orca for anything beyond reading it and the notes feature below
+- A model that makes the viewer, or its worker, type into a terminal that is not a running agent, or start an agent nobody chose
 - The committed `editor/` bundle differing from what `build/` produces from this repository's sources
 
 Bugs in three.js, Draco or meshoptimizer themselves are best reported upstream; tell us too if the
@@ -32,8 +33,17 @@ viewer exposes them.
 ## How the viewer is contained
 
 - It runs in Orca's isolated plugin frame: its own process, a strict Content-Security-Policy, and no
-  network. The manifest asks for no capabilities, worker or commands.
-- It reads the document Orca sends and never edits it, saves it or calls any other Orca API.
+  network. The manifest asks for no commands.
+- It reads the document Orca sends and never edits it or saves it.
+- Sending notes to an agent is the one thing that reaches beyond the file. The frame cannot call Orca's
+  terminal or agent methods; it asks the plugin's worker, which asks for exactly four capabilities
+  (`workspace:read`, `agent:read`, `agent:launch`, `terminal:send`). The worker imports nothing, types
+  only into a terminal that `agents.list` reports as a running agent, starts only agents from a fixed
+  list, and sends a note as one line with control characters removed. Names in a note come from the
+  model, so they are cleaned, shortened, quoted and marked as labels, not instructions. Nothing is sent
+  until the person chooses an agent in the Send menu. A compromised frame could still ask the worker to
+  send text to an agent, which is why the worker's own checks, and the test that fixes the manifest's
+  capabilities, matter.
 - URIs inside a model never reach a loader: only `data:` and the frame's own `blob:` URLs pass.
 - Text from a model is shown with `textContent`, never parsed as HTML.
 - CI runs the viewer in Chromium under Orca's frame policy with hostile and fuzzed models, checks the

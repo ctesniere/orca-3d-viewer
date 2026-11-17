@@ -14,6 +14,10 @@ export type OrcaDocument = {
 
 type OrcaEditorFrame = {
   locale?: string
+  /** Asks this plugin's own worker to run the handler it registered under `name`. */
+  plugin?: {
+    request: (name: string, input?: unknown, options?: { timeoutMs?: number }) => Promise<unknown>
+  }
   document?: {
     onDidChange: (listener: (document: OrcaDocument) => void) => unknown
   }

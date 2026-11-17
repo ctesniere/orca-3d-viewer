@@ -1,7 +1,10 @@
-import { Axis3d, Box, createElement, Grid3x3, type IconNode, Info, Moon, Pause, Play, RotateCcw } from 'lucide'
+import { Axis3d, Box, createElement, Grid3x3, type IconNode, Info, MessageSquarePlus, Moon, Pause, Play, RotateCcw } from 'lucide'
+import type { ModelPick } from './annotation.ts'
+import { createAnnotationUi } from './annotation-ui.ts'
+import { element, icon } from './dom.ts'
 import { cleanName, formatCount, lengthFormat } from './display-format.ts'
 import type { Translate } from './messages.ts'
-import type { ModelSummary } from './model-scene.ts'
+import type { ModelSummary, SpotMarker } from './model-scene.ts'
 import { ALL_CLIPS } from './scene-animation.ts'
 import { loadPreferences, savePreferences } from './viewer-preferences.ts'
 
@@ -11,6 +14,8 @@ export type ViewerActions = {
   setGuidesVisible: (visible: boolean) => void
   playAnimation: (clipIndex: number) => void
   setAnimationPaused: (paused: boolean) => void
+  setAnnotationMarkers: (notes: SpotMarker[], pending: SpotMarker | null) => void
+  setPickingEnabled: (enabled: boolean) => void
 }
 
 export type ViewerUi = {
@@ -19,22 +24,10 @@ export type ViewerUi = {
   showError: (message: string) => void
   /** Notes in the toolbar that a newer save is loading while the current model stays up. */
   setPending: (text: string | null) => void
+  /** Asks what to change at the spot the user picked, near `at`; the notes can then be copied or sent to an agent. */
+  openAnnotation: (pick: ModelPick, at: { x: number; y: number }) => void
   /** Shows a model's figures; `keepToggles` carries wireframe and guides over from the last model. */
   showModel: (summary: ModelSummary, actions: ViewerActions, notices: string[], keepToggles: boolean) => void
-}
-
-function element<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  props: Partial<HTMLElementTagNameMap[K]> = {},
-  children: (Node | string)[] = []
-): HTMLElementTagNameMap[K] {
-  const node = Object.assign(document.createElement(tag), props)
-  node.append(...children)
-  return node
-}
-
-function icon(node: IconNode, size = 14): SVGElement {
-  return createElement(node, { width: size, height: size, 'aria-hidden': 'true' })
 }
 
 function toolButton(iconNode: IconNode, title: string): HTMLButtonElement {
@@ -58,6 +51,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const reset = toolButton(RotateCcw, t('resetView'))
   const wireframe = toolButton(Grid3x3, t('wireframe'))
   const guides = toolButton(Axis3d, t('guides'))
+  const annotate = toolButton(MessageSquarePlus, t('annotateMode'))
   const theme = toolButton(Moon, t('darkTheme'))
   const detailsButton = toolButton(Info, t('details'))
   const play = element('button', { type: 'button', className: 'tool' })
@@ -69,7 +63,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const gridCell = element('span', { className: 'figure' })
   const pending = element('span', { className: 'pending', role: 'status', hidden: true })
   const toolbar = element('footer', { className: 'toolbar' }, [
-    element('div', { className: 'group' }, [reset, wireframe, guides, theme, detailsButton]),
+    element('div', { className: 'group' }, [reset, wireframe, guides, annotate, theme, detailsButton]),
     animationGroup,
     stats,
     dimensions,
@@ -86,9 +80,17 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     detailsText,
     element('div', { className: 'details-actions' }, [copyStatus, copyButton, closeButton])
   ])
-  root.replaceChildren(element('div', { className: 'stage' }, [viewport, overlay, details]), notice, toolbar)
+
+  const annotations = createAnnotationUi(
+    t,
+    locale,
+    { showMarkers: (notes, pending) => actions?.setAnnotationMarkers(notes, pending) },
+    () => viewport.querySelector('canvas')?.focus()
+  )
+  root.replaceChildren(element('div', { className: 'stage' }, [viewport, overlay, details, annotations.popover, annotations.panel]), notice, toolbar)
 
   const openDetails = (): void => {
+    annotations.close(false)
     detailsText.value = report()
     copyStatus.textContent = ''
     details.hidden = false
@@ -122,6 +124,8 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   let wireframeOn = saved.wireframe
   let guidesOn = saved.guides
   const save = (): void => savePreferences({ dark, wireframe: wireframeOn, guides: guidesOn })
+  // Why not saved with the other toggles: it should not turn itself on in the next file someone opens.
+  let annotating = false
   let paused = false
 
   const setPressed = (button: HTMLButtonElement, pressed: boolean): void => {
@@ -134,7 +138,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     play.ariaLabel = title
   }
   const setToolsEnabled = (enabled: boolean): void => {
-    for (const button of [reset, wireframe, guides]) button.disabled = !enabled
+    for (const button of [reset, wireframe, guides, annotate]) button.disabled = !enabled
   }
 
   reset.addEventListener('click', () => actions?.resetView())
@@ -150,6 +154,12 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     gridCell.hidden = !guidesOn
     actions?.setGuidesVisible(guidesOn)
     save()
+  })
+  annotate.addEventListener('click', () => {
+    annotating = !annotating
+    setPressed(annotate, annotating)
+    actions?.setPickingEnabled(annotating)
+    if (!annotating) annotations.close(false)
   })
   const applyTheme = (): void => {
     document.documentElement.classList.toggle('dark', dark)
@@ -186,6 +196,8 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   }
 
   const showOverlay = (text: string, isError: boolean): void => {
+    annotations.close(false)
+    annotations.setVisible(false)
     clearFigures()
     overlay.hidden = false
     toolbar.hidden = isError
@@ -205,6 +217,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     showLoading: () => showOverlay(t('loading'), false),
     showError: (message) => showOverlay(message, true),
     setPending,
+    openAnnotation: annotations.open,
     showModel: (summary, modelActions, notices, keepToggles) => {
       clearFigures()
       actions = modelActions
@@ -216,6 +229,8 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
       paused = false
       setPressed(wireframe, wireframeOn)
       setPressed(guides, guidesOn)
+      setPressed(annotate, annotating)
+      modelActions.setPickingEnabled(annotating)
       if (!summary.wireframeAvailable) {
         wireframeOn = false
         setPressed(wireframe, false)
@@ -260,6 +275,9 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
         depth: lengths.format(depth),
         unit: lengths.unit
       })
+      annotations.setModelSize({ diagonal: Math.hypot(width, height, depth), unit: lengths.unit, scale: lengths.scale })
+      annotations.setVisible(true)
+      annotations.redraw()
       gridCell.hidden = !guidesOn
       gridCell.textContent = t('gridCell', { size: `${lengths.format(summary.gridCellSize)} ${lengths.unit}` })
       viewport.ariaLabel = t('viewportLabel', { summary: `${stats.textContent}, ${dimensions.textContent}` })

@@ -9,7 +9,7 @@ const UNITS: [string, number][] = [
   ['nm', 1e-9]
 ]
 
-export type LengthFormat = { unit: string; format: (meters: number) => string }
+export type LengthFormat = { unit: string; /** Meters in one of `unit`. */ scale: number; format: (meters: number) => string }
 
 /** One unit for a set of lengths in meters, chosen for the largest so the rest read beside it. */
 export function lengthFormat(meters: number[], locale: string): LengthFormat {
@@ -20,7 +20,7 @@ export function lengthFormat(meters: number[], locale: string): LengthFormat {
   const number = new Intl.NumberFormat(locale, { maximumSignificantDigits: 3 })
   // Why: rotating a flat model leaves a rounding error of about 1e-16 where its thickness is 0.
   const negligible = largest * 1e-6
-  return { unit, format: (value) => number.format(Math.abs(value) < negligible ? 0 : value / scale) }
+  return { unit, scale, format: (value) => number.format(Math.abs(value) < negligible ? 0 : value / scale) }
 }
 
 export function formatCount(value: number, locale: string): string {

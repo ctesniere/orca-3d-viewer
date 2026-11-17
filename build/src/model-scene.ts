@@ -1,27 +1,37 @@
 import {
   Box3,
+  CanvasTexture,
+  Group,
   DirectionalLight,
   HemisphereLight,
   type BufferGeometry,
+  type Intersection,
   type Light,
   type Material,
-  type Mesh,
+  Mesh,
+  MeshBasicMaterial,
   NeutralToneMapping,
   NoColorSpace,
   type Object3D,
   PerspectiveCamera,
   PMREMGenerator,
+  Raycaster,
   Scene,
   type SkinnedMesh,
+  Sprite,
+  SpriteMaterial,
   Sphere,
+  SphereGeometry,
   SRGBColorSpace,
   Texture,
   Timer,
+  Vector2,
   Vector3,
   WebGLRenderer
 } from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
+import type { ModelPick, Vec3 } from './annotation.ts'
 import type { GltfModel } from './gltf-model-parse.ts'
 import { disposeObjectTree } from './model-disposal.ts'
 import { measureModel, type ModelStats } from './model-stats.ts'
@@ -41,6 +51,8 @@ export type ModelSummary = {
   otherSceneCount: number
 }
 
+export type SpotMarker = { point: Vec3; radius: number }
+
 export type ModelStage = {
   /** The renderer KTX2 textures are transcoded for. */
   renderer: WebGLRenderer
@@ -56,12 +68,21 @@ export type ModelStage = {
   setGuidesVisible: (visible: boolean) => void
   playAnimation: (clipIndex: number) => void
   setAnimationPaused: (paused: boolean) => void
+  /**
+   * Draws each note as a numbered badge inside a translucent sphere of its radius, and the spot being
+   * written (if any) as a dot in a stronger sphere. Replaces whatever was drawn before.
+   */
+  setAnnotationMarkers: (notes: SpotMarker[], pending: SpotMarker | null) => void
+  /** Whether a click on the model picks a spot; off, a click does nothing. */
+  setPickingEnabled: (enabled: boolean) => void
   dispose: () => void
 }
 
 export type StageEvents = {
   onContextLost: () => void
   onContextRestored: () => void
+  /** The user clicked, without dragging, on the model; `at` is where, in CSS pixels from the view's corner. */
+  onPick: (pick: ModelPick, at: { x: number; y: number }) => void
 }
 
 // Why cap: past 2, each step multiplies the pixels shaded for little visible gain.
@@ -72,6 +93,13 @@ export const PRECISE_BOUNDS_WORK = 2_000_000
 // Shaders still compiling by then are compiled by the first frame instead.
 const COMPILE_WAIT_MS = 10_000
 const MAX_ANISOTROPY = 8
+// A press that moves less than this before it is released is a click, not the start of an orbit or a pan.
+const CLICK_SLOP_PX = 5
+// The pick dot's size as a fraction of its distance from the camera, so it stays the same size on screen.
+const MARKER_SCREEN_FRACTION = 0.012
+// A numbered badge's height as a fraction of the view's; the badge keeps that size however far the camera is.
+const BADGE_SIZE = 0.05
+const MARKER_COLOR = 0xff3b30
 const DEFAULT_LIGHT_INTENSITIES = { hemisphere: 0.6, key: 1.2 }
 
 type Shown = {
@@ -241,10 +269,161 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
     camera.near = Math.max(distance - radius * 4, camera.far / 1e4, 1e-6)
     camera.updateProjectionMatrix()
   }
+  const markers = new Group()
+  scene.add(markers)
+  let pendingDot: Mesh | null = null
+  const updateMarker = (): void => {
+    pendingDot?.scale.setScalar(camera.position.distanceTo(pendingDot.position) * MARKER_SCREEN_FRACTION)
+  }
   controls.addEventListener('change', () => {
     updateClipping()
+    updateMarker()
     render()
   })
+
+  const raycaster = new Raycaster()
+  const pointer = new Vector2()
+  const finite = (value: Vector3): Vec3 | null => (Number.isFinite(value.x + value.y + value.z) ? [value.x, value.y, value.z] : null)
+  // Why walked up: a hidden node hides everything under it, but the raycaster visits it all the same.
+  const isVisible = (object: Object3D, root: Object3D): boolean => {
+    for (let node: Object3D | null = object; node; node = node === root ? null : node.parent) {
+      if (!node.visible) return false
+    }
+    return true
+  }
+  // The material a hit surface is drawn with; a mesh with several has one per group of faces.
+  const surfaceOf = (entry: Intersection): Material | undefined => {
+    const material = (entry.object as Mesh).material as Material | Material[] | undefined
+    return Array.isArray(material) ? material[entry.face?.materialIndex ?? 0] : material
+  }
+  /** What the model has under a point of the canvas (CSS pixels, as pointer events give them), or null. */
+  const pickAt = (clientX: number, clientY: number): ModelPick | null => {
+    if (!shown || contextLost) return null
+    const rect = canvas.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) return null
+    pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, 1 - ((clientY - rect.top) / rect.height) * 2)
+    raycaster.setFromCamera(pointer, camera)
+    // Why scaled by the model: a point or a line is a pixel wide, so it needs some reach to be hit at all.
+    raycaster.params.Points.threshold = shown.radius * 0.01
+    raycaster.params.Line.threshold = shown.radius * 0.01
+    const root = shown.model
+    const hit = raycaster.intersectObject(root, true).find((entry) => isVisible(entry.object, root) && surfaceOf(entry)?.visible !== false)
+    if (!hit) return null
+
+    const path: string[] = []
+    for (let node: Object3D | null = hit.object; node; node = node === root ? null : node.parent) path.unshift(node.name)
+    const point = finite(hit.point)
+    const localPoint = finite(hit.object.worldToLocal(hit.point.clone()))
+    const normal = hit.face ? finite(hit.face.normal.clone().transformDirection(hit.object.matrixWorld)) : null
+    const position = finite(camera.position)
+    const target = finite(controls.target)
+    if (!point || !localPoint || !position || !target) return null
+    return { point, localPoint, normal, path, material: surfaceOf(hit)?.name || null, camera: { position, target } }
+  }
+
+  const offset = (clientX: number, clientY: number): { x: number; y: number } => {
+    const rect = canvas.getBoundingClientRect()
+    return { x: clientX - rect.left, y: clientY - rect.top }
+  }
+  // Why pointer events and a distance: OrbitControls turns a drag into an orbit, so only a press that stayed put is a click.
+  let press: { id: number; x: number; y: number } | null = null
+  let pickingEnabled = false
+  const onPointerDown = (event: PointerEvent): void => {
+    press = pickingEnabled && event.isPrimary && event.button === 0 ? { id: event.pointerId, x: event.clientX, y: event.clientY } : null
+  }
+  const onPointerUp = (event: PointerEvent): void => {
+    const start = press
+    press = null
+    if (!start || event.pointerId !== start.id || event.button !== 0) return
+    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > CLICK_SLOP_PX) return
+    const pick = pickAt(event.clientX, event.clientY)
+    if (pick) events.onPick(pick, offset(event.clientX, event.clientY))
+  }
+  const onPointerCancel = (): void => {
+    press = null
+  }
+  // Why Enter picks the middle: someone who cannot point can still aim the camera, then annotate what is in the centre.
+  const onKeyDown = (event: KeyboardEvent): void => {
+    if (!pickingEnabled || event.key !== 'Enter' || event.repeat || event.altKey || event.ctrlKey || event.metaKey) return
+    const rect = canvas.getBoundingClientRect()
+    const pick = pickAt(rect.left + rect.width / 2, rect.top + rect.height / 2)
+    if (pick) events.onPick(pick, { x: rect.width / 2, y: rect.height / 2 })
+  }
+  canvas.addEventListener('pointerdown', onPointerDown)
+  canvas.addEventListener('pointerup', onPointerUp)
+  canvas.addEventListener('pointercancel', onPointerCancel)
+  canvas.addEventListener('keydown', onKeyDown)
+
+  // A white disc with the note's number, drawn once per note; the sprite then keeps its size on screen.
+  const badgeTexture = (index: number): CanvasTexture => {
+    const size = 64
+    const face = document.createElement('canvas')
+    face.width = size
+    face.height = size
+    const pen = face.getContext('2d')
+    if (pen) {
+      pen.beginPath()
+      pen.arc(size / 2, size / 2, size / 2 - 4, 0, Math.PI * 2)
+      pen.fillStyle = '#ffffff'
+      pen.fill()
+      pen.lineWidth = 5
+      pen.strokeStyle = '#ff3b30'
+      pen.stroke()
+      pen.fillStyle = '#0a0a0a'
+      pen.font = 'bold 34px system-ui, sans-serif'
+      pen.textAlign = 'center'
+      pen.textBaseline = 'middle'
+      pen.fillText(String(index), size / 2, size / 2 + 2)
+    }
+    const texture = new CanvasTexture(face)
+    texture.colorSpace = SRGBColorSpace
+    return texture
+  }
+  const clearMarkers = (): void => {
+    for (const child of [...markers.children]) {
+      markers.remove(child)
+      const part = child as Mesh | Sprite
+      if ('geometry' in part) part.geometry.dispose()
+      const material = part.material as Material & { map?: Texture | null }
+      material.map?.dispose()
+      material.dispose()
+    }
+    pendingDot = null
+  }
+  const setAnnotationMarkers = (notes: SpotMarker[], pending: SpotMarker | null): void => {
+    clearMarkers()
+    // Why not depth-tested: the markers say where a spot is, and a surface in front must not hide it.
+    const area = (spot: SpotMarker, opacity: number): void => {
+      if (!(spot.radius > 0)) return
+      const sphere = new Mesh(
+        new SphereGeometry(spot.radius, 24, 16),
+        new MeshBasicMaterial({ color: MARKER_COLOR, transparent: true, opacity, depthWrite: false, toneMapped: false })
+      )
+      sphere.position.set(...spot.point)
+      sphere.renderOrder = 998
+      markers.add(sphere)
+    }
+    notes.forEach((note, index) => {
+      area(note, 0.16)
+      const badge = new Sprite(new SpriteMaterial({ map: badgeTexture(index + 1), depthTest: false, sizeAttenuation: false, toneMapped: false }))
+      badge.position.set(...note.point)
+      badge.scale.setScalar(BADGE_SIZE)
+      badge.renderOrder = 999
+      markers.add(badge)
+    })
+    if (pending) {
+      area(pending, 0.28)
+      pendingDot = new Mesh(
+        new SphereGeometry(1, 16, 12),
+        new MeshBasicMaterial({ color: MARKER_COLOR, depthTest: false, transparent: true, opacity: 0.9, toneMapped: false })
+      )
+      pendingDot.position.set(...pending.point)
+      pendingDot.renderOrder = 999
+      markers.add(pendingDot)
+      updateMarker()
+    }
+    render()
+  }
 
   const timer = new Timer()
   const running = (): boolean =>
@@ -424,8 +603,20 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
       else startLoop()
       render()
     },
+    setAnnotationMarkers,
+    setPickingEnabled: (enabled) => {
+      pickingEnabled = enabled
+      press = null
+      canvas.style.cursor = enabled ? 'crosshair' : ''
+    },
     dispose: () => {
       clear()
+      clearMarkers()
+      scene.remove(markers)
+      canvas.removeEventListener('pointerdown', onPointerDown)
+      canvas.removeEventListener('pointerup', onPointerUp)
+      canvas.removeEventListener('pointercancel', onPointerCancel)
+      canvas.removeEventListener('keydown', onKeyDown)
       document.removeEventListener('visibilitychange', onVisibilityChange)
       pixelRatioQuery?.removeEventListener('change', watchPixelRatio)
       visibility.disconnect()

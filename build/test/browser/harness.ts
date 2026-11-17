@@ -51,6 +51,9 @@ declare global {
       send: (document: unknown) => void
       hostCalls: string[]
       cspViolations: string[]
+      /** The requests the frame made to the plugin's worker, and what the stand-in answers to each name. */
+      workerCalls: { name: string; input: unknown }[]
+      workerAnswers: Record<string, unknown>
     }
   }
 }
@@ -61,6 +64,8 @@ type StandInOptions = { locale: string; webgl: boolean }
 function installOrcaStandIn({ locale, webgl }: StandInOptions): void {
   const hostCalls: string[] = []
   const cspViolations: string[] = []
+  const workerCalls: { name: string; input: unknown }[] = []
+  const workerAnswers: Record<string, unknown> = {}
   let listener: ((document: unknown) => void) | null = null
   const record = (name: string) => (...args: unknown[]) => {
     hostCalls.push(`${name}(${JSON.stringify(args).slice(0, 200)})`)
@@ -85,6 +90,17 @@ function installOrcaStandIn({ locale, webgl }: StandInOptions): void {
         hostCalls.push(`on(${event})`)
         return { dispose() {} }
       },
+      // The frame's way to the plugin's worker; it is not a call "beyond reading the document", so hostCalls ignores it.
+      plugin: {
+        request: async (name: string, input: unknown) => {
+          workerCalls.push({ name, input })
+          const answer = workerAnswers[name]
+          if (answer instanceof Error || (typeof answer === 'object' && answer !== null && 'error' in answer)) {
+            throw new Error(String((answer as { error: unknown }).error))
+          }
+          return answer ?? null
+        }
+      },
       shell: { openExternal: record('shell.openExternal') },
       files: { saveAs: record('files.saveAs') },
       document: Object.freeze({
@@ -101,6 +117,8 @@ function installOrcaStandIn({ locale, webgl }: StandInOptions): void {
   window.__orcaTest = {
     hostCalls,
     cspViolations,
+    workerCalls,
+    workerAnswers,
     send: (document) => {
       if (!listener) throw new Error('the viewer has not subscribed to document changes')
       listener(document)

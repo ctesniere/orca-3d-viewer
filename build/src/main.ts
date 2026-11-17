@@ -131,7 +131,8 @@ function stageFor(): ModelStage {
     },
     onContextRestored: () => {
       if (stage && lastShown) showModel(lastShown.summary, stage, shownNotices, true)
-    }
+    },
+    onPick: (pick, at) => ui.openAnnotation(pick, at)
   })
   return stage
 }
