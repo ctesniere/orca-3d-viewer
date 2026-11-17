@@ -1,4 +1,5 @@
 import {
+  AmbientLight,
   Box3,
   CanvasTexture,
   Group,
@@ -33,6 +34,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import type { ModelPick, Vec3 } from './annotation.ts'
 import type { GltfModel } from './gltf-model-parse.ts'
+import { type Lighting, DEFAULT_LIGHTING, lightLevels } from './lighting.ts'
 import { disposeObjectTree } from './model-disposal.ts'
 import { measureModel, type ModelStats } from './model-stats.ts'
 import { createSceneAnimation, type SceneAnimation } from './scene-animation.ts'
@@ -65,6 +67,8 @@ export type ModelStage = {
   clear: () => void
   resetView: () => void
   setWireframe: (enabled: boolean) => void
+  /** How the model is lit: the type of light, how strong, how bright the picture is and where the direct light comes from. */
+  setLighting: (lighting: Lighting) => void
   setGuidesVisible: (visible: boolean) => void
   playAnimation: (clipIndex: number) => void
   setAnimationPaused: (paused: boolean) => void
@@ -100,7 +104,6 @@ const MARKER_SCREEN_FRACTION = 0.012
 // A numbered badge's height as a fraction of the view's; the badge keeps that size however far the camera is.
 const BADGE_SIZE = 0.05
 const MARKER_COLOR = 0xff3b30
-const DEFAULT_LIGHT_INTENSITIES = { hemisphere: 0.6, key: 1.2 }
 
 type Shown = {
   model: Object3D
@@ -232,10 +235,41 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
   const anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), MAX_ANISOTROPY)
 
   const scene = new Scene()
-  const hemisphere = new HemisphereLight(0xffffff, 0x444444, DEFAULT_LIGHT_INTENSITIES.hemisphere)
-  const keyLight = new DirectionalLight(0xffffff, DEFAULT_LIGHT_INTENSITIES.key)
-  keyLight.position.set(1, 2, 1.5)
-  scene.add(hemisphere, keyLight)
+  const hemisphere = new HemisphereLight(0xffffff, 0x444444, 0)
+  const keyLight = new DirectionalLight(0xffffff, 0)
+  const ambient = new AmbientLight(0xffffff, 0)
+  scene.add(hemisphere, keyLight, ambient)
+  let shown: Shown | null = null
+  let lighting: Lighting = DEFAULT_LIGHTING
+  let modelHasLights = false
+  // Why metalness is set to 0 in the flat type: a metal has no colour of its own, only reflections, so with
+  // the reflections off it would be black. Each material's own value is kept and put back with the other types.
+  const ownMetalness = new WeakMap<Material, number>()
+  const applyMaterialLook = (): void => {
+    for (const material of shown?.materials ?? []) {
+      const metal = material as Material & { metalness?: number }
+      if (typeof metal.metalness !== 'number') continue
+      if (lighting.mode === 'flat') {
+        if (!ownMetalness.has(material)) ownMetalness.set(material, metal.metalness)
+        metal.metalness = 0
+      } else if (ownMetalness.has(material)) {
+        metal.metalness = ownMetalness.get(material)!
+        ownMetalness.delete(material)
+      }
+    }
+  }
+  const applyLighting = (): void => {
+    applyMaterialLook()
+    const levels = lightLevels(lighting, modelHasLights)
+    hemisphere.intensity = levels.hemisphere
+    keyLight.intensity = levels.key
+    keyLight.visible = levels.keyVisible
+    keyLight.position.set(...levels.keyPosition)
+    ambient.intensity = levels.ambient
+    scene.environmentIntensity = levels.environment
+    renderer.toneMappingExposure = lighting.exposure
+  }
+  applyLighting()
 
   let environment: Texture | null = null
   const buildEnvironment = (): void => {
@@ -252,7 +286,6 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
   const camera = new PerspectiveCamera(45, 1, 0.01, 1000)
   const controls = new OrbitControls(camera, canvas)
   controls.listenToKeyEvents(canvas)
-  let shown: Shown | null = null
   let contextLost = false
   let onScreen = true
 
@@ -565,11 +598,11 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
         previous.center.distanceTo(next.center) < Math.max(previous.radius, next.radius) * 0.5 &&
         next.radius / previous.radius > 0.5 &&
         next.radius / previous.radius < 2
-      const ownLights = hasOwnLights(model.scene)
-      hemisphere.intensity = ownLights ? DEFAULT_LIGHT_INTENSITIES.hemisphere * 0.25 : DEFAULT_LIGHT_INTENSITIES.hemisphere
-      keyLight.visible = !ownLights
+      modelHasLights = hasOwnLights(model.scene)
+      applyLighting()
       clear()
       shown = next
+      applyMaterialLook()
       scene.add(next.model, next.guides.group)
       if (!(keepView && alike)) frame(next.center, next.radius)
       updateClipping()
@@ -586,6 +619,11 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
       for (const material of shown?.materials ?? []) {
         if ('wireframe' in material) material.wireframe = enabled
       }
+      render()
+    },
+    setLighting: (next) => {
+      lighting = next
+      applyLighting()
       render()
     },
     setGuidesVisible: (visible) => {

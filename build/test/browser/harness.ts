@@ -234,7 +234,7 @@ export async function openFrame({ locale = 'en-US', webgl = true } = {}): Promis
             .filter((figure) => !figure.hidden)
             .map((figure) => figure.innerText),
           notice: notice && !notice.hidden ? notice.innerText : null,
-          animations: [...document.querySelectorAll('option')].map((option) => option.textContent ?? '')
+          animations: [...document.querySelectorAll('.toolbar option')].map((option) => option.textContent ?? '')
         }
       }
       return null

@@ -1,7 +1,9 @@
-import { Axis3d, Box, createElement, Grid3x3, type IconNode, Info, MessageSquarePlus, Moon, Pause, Play, RotateCcw } from 'lucide'
+import { Axis3d, Box, createElement, Grid3x3, type IconNode, Info, MessageSquarePlus, Moon, Pause, Play, RotateCcw, Sun } from 'lucide'
 import type { ModelPick } from './annotation.ts'
 import { createAnnotationUi } from './annotation-ui.ts'
 import { element, icon } from './dom.ts'
+import { createLightingUi } from './lighting-ui.ts'
+import type { Lighting } from './lighting.ts'
 import { cleanName, formatCount, lengthFormat } from './display-format.ts'
 import type { Translate } from './messages.ts'
 import type { ModelSummary, SpotMarker } from './model-scene.ts'
@@ -14,6 +16,7 @@ export type ViewerActions = {
   setGuidesVisible: (visible: boolean) => void
   playAnimation: (clipIndex: number) => void
   setAnimationPaused: (paused: boolean) => void
+  setLighting: (lighting: Lighting) => void
   setAnnotationMarkers: (notes: SpotMarker[], pending: SpotMarker | null) => void
   setPickingEnabled: (enabled: boolean) => void
 }
@@ -52,6 +55,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const wireframe = toolButton(Grid3x3, t('wireframe'))
   const guides = toolButton(Axis3d, t('guides'))
   const annotate = toolButton(MessageSquarePlus, t('annotateMode'))
+  const lightingButton = toolButton(Sun, t('lighting'))
   const theme = toolButton(Moon, t('darkTheme'))
   const detailsButton = toolButton(Info, t('details'))
   const play = element('button', { type: 'button', className: 'tool' })
@@ -63,7 +67,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const gridCell = element('span', { className: 'figure' })
   const pending = element('span', { className: 'pending', role: 'status', hidden: true })
   const toolbar = element('footer', { className: 'toolbar' }, [
-    element('div', { className: 'group' }, [reset, wireframe, guides, annotate, theme, detailsButton]),
+    element('div', { className: 'group' }, [reset, wireframe, guides, annotate, lightingButton, theme, detailsButton]),
     animationGroup,
     stats,
     dimensions,
@@ -81,16 +85,28 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     element('div', { className: 'details-actions' }, [copyStatus, copyButton, closeButton])
   ])
 
+  let lighting = loadPreferences().lighting
+  const lightingUi = createLightingUi(
+    t,
+    lighting,
+    (next) => {
+      lighting = next
+      actions?.setLighting(next)
+      save()
+    },
+    () => setPressed(lightingButton, false)
+  )
   const annotations = createAnnotationUi(
     t,
     locale,
     { showMarkers: (notes, pending) => actions?.setAnnotationMarkers(notes, pending) },
     () => viewport.querySelector('canvas')?.focus()
   )
-  root.replaceChildren(element('div', { className: 'stage' }, [viewport, overlay, details, annotations.popover, annotations.panel]), notice, toolbar)
+  root.replaceChildren(element('div', { className: 'stage' }, [viewport, overlay, details, annotations.popover, annotations.panel, lightingUi.panel]), notice, toolbar)
 
   const openDetails = (): void => {
     annotations.close(false)
+    lightingUi.close()
     detailsText.value = report()
     copyStatus.textContent = ''
     details.hidden = false
@@ -123,7 +139,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   let dark = saved.dark
   let wireframeOn = saved.wireframe
   let guidesOn = saved.guides
-  const save = (): void => savePreferences({ dark, wireframe: wireframeOn, guides: guidesOn })
+  const save = (): void => savePreferences({ dark, wireframe: wireframeOn, guides: guidesOn, lighting })
   // Why not saved with the other toggles: it should not turn itself on in the next file someone opens.
   let annotating = false
   let paused = false
@@ -138,7 +154,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     play.ariaLabel = title
   }
   const setToolsEnabled = (enabled: boolean): void => {
-    for (const button of [reset, wireframe, guides, annotate]) button.disabled = !enabled
+    for (const button of [reset, wireframe, guides, annotate, lightingButton]) button.disabled = !enabled
   }
 
   reset.addEventListener('click', () => actions?.resetView())
@@ -160,6 +176,13 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     setPressed(annotate, annotating)
     actions?.setPickingEnabled(annotating)
     if (!annotating) annotations.close(false)
+  })
+  lightingButton.addEventListener('click', () => {
+    if (lightingUi.isOpen()) return lightingUi.toggle()
+    details.hidden = true
+    annotations.close(false)
+    lightingUi.toggle()
+    setPressed(lightingButton, true)
   })
   const applyTheme = (): void => {
     document.documentElement.classList.toggle('dark', dark)
@@ -197,6 +220,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
 
   const showOverlay = (text: string, isError: boolean): void => {
     annotations.close(false)
+    lightingUi.close()
     annotations.setVisible(false)
     clearFigures()
     overlay.hidden = false
@@ -225,12 +249,15 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
         const last = loadPreferences()
         wireframeOn = last.wireframe
         guidesOn = last.guides
+        lighting = last.lighting
+        lightingUi.set(lighting)
       }
       paused = false
       setPressed(wireframe, wireframeOn)
       setPressed(guides, guidesOn)
       setPressed(annotate, annotating)
       modelActions.setPickingEnabled(annotating)
+      modelActions.setLighting(lighting)
       if (!summary.wireframeAvailable) {
         wireframeOn = false
         setPressed(wireframe, false)

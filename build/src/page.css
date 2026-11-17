@@ -102,3 +102,10 @@ button, select { font: inherit; color: inherit; }
 .menu-item:hover, .menu-item:focus-visible { background: var(--accent); color: var(--accent-fg); outline: none; }
 .menu-detail { color: var(--muted-fg); font-size: 11px; }
 .copy-buffer { box-sizing: border-box; width: calc(100% - 24px); height: 90px; margin: 0 12px 8px; padding: 6px; border: 1px solid var(--input); border-radius: var(--radius); background: var(--muted); color: var(--fg); font: 11px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre; }
+
+.lighting { position: absolute; z-index: 3; left: 12px; bottom: 12px; width: min(300px, calc(100% - 24px)); box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); box-shadow: 0 4px 16px rgb(0 0 0 / 0.18); }
+.lighting-row { display: grid; grid-template-columns: 96px 1fr 44px; align-items: center; gap: 8px; color: var(--muted-fg); }
+.lighting-row .select { grid-column: 2 / 4; max-width: none; width: 100%; }
+.lighting-range { width: 100%; margin: 0; }
+.lighting-range:disabled { opacity: 0.4; }
+.lighting-value { text-align: right; font-variant-numeric: tabular-nums; }

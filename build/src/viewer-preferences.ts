@@ -1,22 +1,29 @@
 // The toolbar's last choices, kept in the frame's own localStorage: Orca gives each plugin its own,
 // on disk and cleared on uninstall. Older Orca frames refuse storage, and then nothing is kept.
 
-export type ViewerPreferences = { dark: boolean; wireframe: boolean; guides: boolean }
+import { DEFAULT_LIGHTING, type Lighting, lightingFrom } from './lighting.ts'
+
+export type ViewerPreferences = { dark: boolean; wireframe: boolean; guides: boolean; lighting: Lighting }
 
 const KEY = 'viewer-preferences'
-export const DEFAULT_PREFERENCES: ViewerPreferences = { dark: false, wireframe: false, guides: true }
+export const DEFAULT_PREFERENCES: ViewerPreferences = { dark: false, wireframe: false, guides: true, lighting: DEFAULT_LIGHTING }
 
 export function loadPreferences(): ViewerPreferences {
   try {
     const stored: unknown = JSON.parse(localStorage.getItem(KEY) ?? 'null')
-    if (typeof stored !== 'object' || stored === null) return { ...DEFAULT_PREFERENCES }
-    const flag = (name: keyof ViewerPreferences): boolean => {
+    if (typeof stored !== 'object' || stored === null) return { ...DEFAULT_PREFERENCES, lighting: { ...DEFAULT_LIGHTING } }
+    const flag = (name: 'dark' | 'wireframe' | 'guides'): boolean => {
       const value = Object.getOwnPropertyDescriptor(stored, name)?.value
       return typeof value === 'boolean' ? value : DEFAULT_PREFERENCES[name]
     }
-    return { dark: flag('dark'), wireframe: flag('wireframe'), guides: flag('guides') }
+    return {
+      dark: flag('dark'),
+      wireframe: flag('wireframe'),
+      guides: flag('guides'),
+      lighting: lightingFrom(Object.getOwnPropertyDescriptor(stored, 'lighting')?.value)
+    }
   } catch {
-    return { ...DEFAULT_PREFERENCES }
+    return { ...DEFAULT_PREFERENCES, lighting: { ...DEFAULT_LIGHTING } }
   }
 }
 
