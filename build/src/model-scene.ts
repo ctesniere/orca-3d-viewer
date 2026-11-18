@@ -38,6 +38,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import type { ModelPick, Vec3 } from './annotation.ts'
 import type { GltfModel } from './gltf-model-parse.ts'
 import { type Lighting, DEFAULT_LIGHTING, lightLevels } from './lighting.ts'
+import { saveView, type SavedView } from './camera-storage.ts'
 import { disposeObjectTree } from './model-disposal.ts'
 import { findPiece, namePath, pieceIdOf } from './piece-id.ts'
 import { measureModel, type ModelStats } from './model-stats.ts'
@@ -71,9 +72,15 @@ export type ModelStage = {
   renderer: WebGLRenderer
   /**
    * Shows `model` in place of the current one once its shaders are compiled; keeps the camera when
-   * `keepView` and the bounds are alike. On failure the current model stays and `model` is released.
+   * `keepView` and the bounds are alike, and puts it where `restore` says when that is a place the model
+   * allows. On failure the current model stays and `model` is released.
    */
-  show: (model: GltfModel, keepView: boolean) => Promise<ModelSummary>
+  show: (model: GltfModel, keepView: boolean, restore?: SavedView | null) => Promise<ModelSummary>
+  /**
+   * Names the document on screen, from now on remembering where the camera is under it. Called after `show`, so
+   * that the framing a new model gets is not remembered for the one before it.
+   */
+  setViewKey: (key: string | null) => void
   /** Removes and releases the current model. */
   clear: () => void
   resetView: () => void
@@ -327,10 +334,25 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
   const updateMarker = (): void => {
     pendingDot?.scale.setScalar(camera.position.distanceTo(pendingDot.position) * MARKER_SCREEN_FRACTION)
   }
+  // Why remembered after a pause and when the page is hidden: a drag changes the view many times a second, and
+  // the frame may be recreated the moment the person leaves the tab, without another event to save on.
+  let viewKey: string | null = null
+  let rememberTimer: ReturnType<typeof setTimeout> | undefined
+  const rememberView = (): void => {
+    clearTimeout(rememberTimer)
+    if (!viewKey) return
+    saveView(viewKey, {
+      position: [camera.position.x, camera.position.y, camera.position.z],
+      target: [controls.target.x, controls.target.y, controls.target.z]
+    })
+  }
+  const onPageHide = (): void => rememberView()
   controls.addEventListener('change', () => {
     updateClipping()
     updateMarker()
     render()
+    clearTimeout(rememberTimer)
+    if (viewKey) rememberTimer = setTimeout(rememberView, 250)
   })
 
   const raycaster = new Raycaster()
@@ -605,9 +627,11 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
     }
   }
   const onVisibilityChange = (): void => {
-    if (!document.hidden) startLoop()
+    if (document.hidden) rememberView()
+    else startLoop()
   }
   document.addEventListener('visibilitychange', onVisibilityChange)
+  window.addEventListener('pagehide', onPageHide)
   // Why also an intersection check: a tab Orca hides with CSS still reports the document as visible.
   const visibility = new IntersectionObserver(([entry]) => {
     onScreen = entry?.isIntersecting ?? true
@@ -666,6 +690,15 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
     controls.update()
   }
 
+  /** Moves the camera to `view` if it is a place the orbit limits allow, as set by the framing just before. */
+  const putCameraAt = ({ position, target }: SavedView): void => {
+    const distance = Math.hypot(position[0] - target[0], position[1] - target[1], position[2] - target[2])
+    if (!(distance >= controls.minDistance && distance <= controls.maxDistance)) return
+    camera.position.set(...position)
+    controls.target.set(...target)
+    controls.update()
+  }
+
   const release = (entry: Shown): void => {
     // Why first: the model's own materials are put back before they are released with it.
     lightPieces(new Set(), new Set())
@@ -685,7 +718,10 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
 
   return {
     renderer,
-    show: async (model, keepView) => {
+    show: async (model, keepView, restore) => {
+      // Why forgotten here: the camera moves while this model is framed, and that is not the last model's view.
+      viewKey = null
+      clearTimeout(rememberTimer)
       let guides: SceneGuides | null = null
       let animation: SceneAnimation | null = null
       let next: Shown
@@ -735,11 +771,16 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
       applyMaterialLook()
       scene.add(next.model, next.guides.group)
       if (!(keepView && alike)) frame(next.center, next.radius)
+      if (restore) putCameraAt(restore)
       updateClipping()
       render()
       return summary
     },
     clear,
+    setViewKey: (key) => {
+      viewKey = key
+      rememberView()
+    },
     resetView: () => {
       if (shown) frame(shown.center, shown.radius)
       updateClipping()
@@ -790,6 +831,8 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
       canvas.removeEventListener('pointercancel', onPointerCancel)
       canvas.removeEventListener('keydown', onKeyDown)
       document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('pagehide', onPageHide)
+      clearTimeout(rememberTimer)
       pixelRatioQuery?.removeEventListener('change', watchPixelRatio)
       visibility.disconnect()
       observer.disconnect()

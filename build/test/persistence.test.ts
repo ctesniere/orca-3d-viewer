@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { beforeEach, describe, it } from 'node:test'
 import { Group, Mesh, Object3D } from 'three'
 import type { ModelPick, Note } from '../src/annotation.ts'
+import { loadView, MAX_SAVED_VIEWS, saveView } from '../src/camera-storage.ts'
 import { documentId } from '../src/document-id.ts'
 import { loadNotes, MAX_STORED_DOCUMENTS, MAX_STORED_NOTES, notesFrom, saveNotes } from '../src/notes-storage.ts'
 import { findPiece, MAX_STORED_NAME, namePath, pieceIdOf } from '../src/piece-id.ts'
@@ -159,5 +160,47 @@ describe('stored notes', () => {
     Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => { throw new Error('denied') }, setItem: () => { throw new Error('full') } } })
     assert.doesNotThrow(() => saveNotes('x', '', [note('a')]))
     assert.equal(loadNotes('x'), null)
+  })
+})
+
+describe('stored camera', () => {
+  const store = new Map<string, string>()
+  beforeEach(() => {
+    store.clear()
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => void store.set(key, value) }
+    })
+  })
+  const view = (x: number) => ({ position: [x, 2, 3] as [number, number, number], target: [0, 0, 0] as [number, number, number] })
+
+  it('gives a document’s view back, newest first, and keeps only the last few', () => {
+    saveView('a', view(1))
+    assert.deepEqual(loadView('a'), view(1))
+    assert.equal(loadView('b'), null)
+    saveView('a', view(9))
+    assert.deepEqual(loadView('a'), view(9))
+    for (let index = 0; index < MAX_SAVED_VIEWS + 4; index++) saveView(`doc-${index}`, view(index))
+    assert.equal(loadView('a'), null)
+    assert.equal(JSON.parse(store.get('viewer-cameras')!).views.length, MAX_SAVED_VIEWS)
+  })
+
+  it('ignores every stored view that is not two valid points, and broken storage, without throwing', () => {
+    for (const stored of [
+      '',
+      'not json',
+      'null',
+      '{"views":5}',
+      '{"views":[null,5,{"id":5},{"id":"x"},{"id":"x","position":[1,2],"target":[0,0,0]},{"id":"x","position":[1,2,"a"],"target":[0,0,0]},{"id":"x","position":[1,2,3],"target":[0,0,1e99]},{"id":"x","position":[1,2,3],"target":[0,0,null]}]}',
+      '{"views":[{"id":"x","position":[1,2,3],"target":[0,0,0],"__proto__":{"id":"y"}}]}'
+    ]) {
+      store.set('viewer-cameras', stored)
+      assert.doesNotThrow(() => loadView('x'))
+    }
+    store.set('viewer-cameras', '{"views":[{"id":"x","position":[1,2],"target":[0,0,0]}]}')
+    assert.equal(loadView('x'), null)
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => { throw new Error('denied') }, setItem: () => { throw new Error('full') } } })
+    assert.doesNotThrow(() => saveView('x', view(1)))
+    assert.equal(loadView('x'), null)
   })
 })

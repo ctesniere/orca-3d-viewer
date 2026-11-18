@@ -38,6 +38,37 @@ describe('rendering', () => {
     assertContained(await frame.report())
   })
 
+  it('keeps the camera where it was when Orca recreates the frame on the same file', async () => {
+    await frame.open({ bytes: glb(triangleGltf()) })
+    // A grid of pixels stands for the view: it differs as soon as the camera has moved.
+    const box = (await frame.page.locator('.viewport canvas').boundingBox())!
+    const view = async (): Promise<string> => {
+      const pixels: number[][] = []
+      for (const fx of [0.2, 0.35, 0.5, 0.65, 0.8]) {
+        for (const fy of [0.2, 0.4, 0.6, 0.8]) pixels.push(await frame.pixel(Math.round(box.x + box.width * fx), Math.round(box.y + box.height * fy)))
+      }
+      return JSON.stringify(pixels)
+    }
+    const initial = await view()
+    const [x, y] = [box.x + box.width / 2, box.y + box.height / 2]
+    await frame.page.mouse.move(x, y)
+    await frame.page.mouse.wheel(0, -500)
+    await frame.page.mouse.down()
+    await frame.page.mouse.move(x + 90, y - 40, { steps: 6 })
+    await frame.page.mouse.up()
+    const moved = await view()
+    assert.notEqual(moved, initial, 'the camera moved')
+    // Reloaded at once, with the save still waiting for its pause: the page being hidden must save it.
+    await frame.page.reload()
+    await frame.open({ bytes: glb(triangleGltf()) })
+    assert.equal(await view(), moved, 'the camera is where it was left, zoom included')
+    await frame.page.getByRole('button', { name: 'Reset view' }).click()
+    assert.equal(await view(), initial, 'Reset view still goes back to the first framing')
+    await frame.page.reload()
+    await frame.open({ bytes: glb(triangleGltf()) })
+    assert.equal(await view(), initial, 'and that is what is kept then')
+  })
+
   it('opens light whatever Orca’s theme, and the toolbar switches it to dark and back', async () => {
     await frame.page.evaluate(() => {
       document.head.append(Object.assign(document.createElement('style'), { textContent: ':root{--orca-background:#0a0a0a}' }))
