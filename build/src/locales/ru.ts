@@ -99,6 +99,7 @@ export const RU: Messages = {
   noteChange: 'Изменить',
   noteQuestion: 'Вопрос',
   noteRadius: 'Радиус',
+  noteZone: 'Выбрать и соседние детали (зона)',
   noteAdd: 'Добавить',
   noteCancel: 'Отмена',
   noteUnnamed: 'Часть без названия',

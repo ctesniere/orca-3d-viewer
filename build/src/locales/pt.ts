@@ -99,6 +99,7 @@ export const PT: Messages = {
   noteChange: 'Alterar',
   noteQuestion: 'Pergunta',
   noteRadius: 'Raio',
+  noteZone: 'Selecionar também as peças vizinhas (zona)',
   noteAdd: 'Adicionar',
   noteCancel: 'Cancelar',
   noteUnnamed: 'Parte sem nome',

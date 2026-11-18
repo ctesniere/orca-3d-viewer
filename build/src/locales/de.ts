@@ -100,6 +100,7 @@ export const DE: Messages = {
   noteChange: 'Ändern',
   noteQuestion: 'Frage',
   noteRadius: 'Radius',
+  noteZone: 'Auch die umliegenden Teile auswählen (Zone)',
   noteAdd: 'Hinzufügen',
   noteCancel: 'Abbrechen',
   noteUnnamed: 'Unbenannter Teil',

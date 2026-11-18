@@ -6,6 +6,7 @@ import { cleanText, formatCount } from './display-format.ts'
 import { element, icon } from './dom.ts'
 import type { Translate } from './messages.ts'
 import type { SpotMarker } from './model-scene.ts'
+import { loadNotes, saveNotes } from './notes-storage.ts'
 import { canSend, listTargets, type SendTarget, sendNotes, type SendTargets } from './notes-send.ts'
 
 export type AnnotationHost = {
@@ -28,10 +29,15 @@ export type AnnotationUi = {
   redraw: () => void
   /** Hides the list while the view shows no model. */
   setVisible: (visible: boolean) => void
+  /**
+   * Says which document is on screen (see document-id.ts). With no notes yet, those kept for it are brought
+   * back, as after Orca recreated the frame; with notes, they stay and are kept for this document too.
+   */
+  setDocument: (id: string) => void
 }
 
-// Why 0: a note marks one point until the person widens it, and a radius nobody asked for would only be noise.
-const DEFAULT_RADIUS = 0
+// Turning on the zone starts it at this fraction of the model's diagonal: wide enough to reach the next piece.
+const ZONE_RADIUS_FRACTION = 0.05
 const MAX_REASON_CHARACTERS = 160
 // Names Orca gives its agents, as people know them.
 const AGENT_NAMES: Record<string, string> = {
@@ -50,18 +56,24 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
   let notes: Note[] = []
   let pending: ModelPick | null = null
   let kind: NoteKind = 'change'
+  let zone = false
   let size: ModelSize = { diagonal: 1, unit: 'm', scale: 1 }
   let visible = true
   let expanded = true
   // Orca never tells the viewer where the file is, so the person names it; it is kept for this tab only.
   let filePath = ''
+  let documentKey: string | null = null
+  const persist = (): void => {
+    if (documentKey) saveNotes(documentKey, filePath, notes)
+  }
 
   // --- The popover that asks for a note ---
   const target = element('strong', { className: 'popover-target' })
   const text = element('textarea', { className: 'popover-text', placeholder: t('annotateTitle'), ariaLabel: t('annotateTitle'), maxLength: MAX_COMMENT_CHARACTERS, rows: 4 })
   const changeButton = element('button', { type: 'button', className: 'segment' }, [icon(Pencil), t('noteChange')])
   const questionButton = element('button', { type: 'button', className: 'segment' }, [icon(CircleHelp), t('noteQuestion')])
-  const radiusInput = element('input', { type: 'number', className: 'radius-input', min: '0', step: 'any', ariaLabel: t('noteRadius') })
+  const zoneInput = element('input', { type: 'checkbox', className: 'zone-input' })
+  const radiusInput = element('input', { type: 'number', className: 'radius-input', min: '0', step: 'any', ariaLabel: t('noteRadius'), disabled: true })
   const radiusUnit = element('span', { className: 'radius-unit' })
   const cancelButton = element('button', { type: 'button', className: 'text-button', textContent: t('noteCancel') })
   const shortcut = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘↵' : 'Ctrl+↵'
@@ -74,6 +86,7 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
     target,
     text,
     element('div', { className: 'segments', role: 'group', ariaLabel: t('annotateTitle') }, [changeButton, questionButton]),
+    element('label', { className: 'zone-row' }, [zoneInput, element('span', { textContent: t('noteZone') })]),
     element('label', { className: 'radius-row' }, [element('span', { textContent: t('noteRadius') }), radiusInput, radiusUnit]),
     element('div', { className: 'popover-actions' }, [cancelButton, addButton])
   ])
@@ -81,10 +94,17 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
   const showRadius = (meters: number): void => {
     radiusInput.value = String(Number((meters / size.scale).toPrecision(2)))
   }
-  /** The radius written in the field, in metres; the default when the field holds no number. */
+  /** The radius written in the field, in metres; 0 outside a zone, or when the field holds no number. */
   const radius = (): number => {
     const written = radiusInput.valueAsNumber * size.scale
-    return Number.isFinite(written) && written >= 0 ? Math.min(written, size.diagonal) : DEFAULT_RADIUS
+    return zone && Number.isFinite(written) && written >= 0 ? Math.min(written, size.diagonal) : 0
+  }
+  const setZone = (next: boolean): void => {
+    zone = next
+    zoneInput.checked = next
+    radiusInput.disabled = !next
+    // Why a starting radius: a zone of 0 would reach no piece beyond the clicked one.
+    if (next && !(radiusInput.valueAsNumber > 0)) showRadius(size.diagonal * ZONE_RADIUS_FRACTION)
   }
   const setKind = (next: NoteKind): void => {
     kind = next
@@ -94,8 +114,8 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
 
   const redraw = (): void => {
     host.showMarkers(
-      notes.map((note) => ({ point: note.pick.point, radius: note.radius })),
-      pending && !popover.hidden ? { point: pending.point, radius: radius() } : null
+      notes.map((note) => ({ point: note.pick.point, zone: note.zone, radius: note.radius, pieceId: note.pick.pieceId })),
+      pending && !popover.hidden ? { point: pending.point, zone, radius: radius(), pieceId: pending.pieceId } : null
     )
   }
 
@@ -148,6 +168,7 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
         const remove = element('button', { type: 'button', className: 'tool note-remove', title: t('noteRemove', { index: index + 1 }), ariaLabel: t('noteRemove', { index: index + 1 }) }, [icon(X)])
         remove.addEventListener('click', () => {
           notes = notes.filter((entry) => entry !== note)
+          persist()
           renderNotes()
           redraw()
         })
@@ -254,7 +275,8 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
   const add = (): void => {
     const comment = text.value.trim()
     if (!pending || comment === '') return
-    notes = [...notes, { kind, comment, radius: radius(), pick: pending }]
+    notes = [...notes, { kind, comment, zone, radius: radius(), pick: pending }]
+    persist()
     close(true)
     renderNotes()
   }
@@ -263,6 +285,10 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
   questionButton.addEventListener('click', () => setKind('question'))
   text.addEventListener('input', () => {
     addButton.disabled = text.value.trim() === ''
+  })
+  zoneInput.addEventListener('change', () => {
+    setZone(zoneInput.checked)
+    redraw()
   })
   radiusInput.addEventListener('input', redraw)
   cancelButton.addEventListener('click', () => close(true))
@@ -277,11 +303,13 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
   })
   fileInput.addEventListener('input', () => {
     filePath = fileInput.value
+    persist()
   })
   sendButton.addEventListener('click', () => void openMenu())
   copyButton.addEventListener('click', copy)
   clearButton.addEventListener('click', () => {
     notes = []
+    persist()
     closeMenu()
     renderNotes()
     redraw()
@@ -307,7 +335,8 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
         text.value = ''
         addButton.disabled = true
         setKind('change')
-        showRadius(DEFAULT_RADIUS)
+        showRadius(0)
+        setZone(false)
         say(null)
       }
       closeMenu()
@@ -328,6 +357,16 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
       radiusUnit.textContent = next.unit
     },
     redraw,
+    setDocument: (id) => {
+      documentKey = id
+      const stored = notes.length === 0 && filePath === '' ? loadNotes(id) : null
+      if (!stored) return persist()
+      notes = stored.notes
+      filePath = stored.filePath
+      fileInput.value = filePath
+      renderNotes()
+      redraw()
+    },
     setVisible: (next) => {
       visible = next
       renderNotes()

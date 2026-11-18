@@ -83,6 +83,7 @@ export const ZH_HANS: Messages = {
   noteChange: '更改',
   noteQuestion: '提问',
   noteRadius: '半径',
+  noteZone: '同时选择周围的部件（区域）',
   noteAdd: '添加',
   noteCancel: '取消',
   noteUnnamed: '未命名部分',

@@ -29,6 +29,8 @@ export type ViewerUi = {
   setPending: (text: string | null) => void
   /** Asks what to change at the spot the user picked, near `at`; the notes can then be copied or sent to an agent. */
   openAnnotation: (pick: ModelPick, at: { x: number; y: number }) => void
+  /** Says which document is shown, so that its notes come back after Orca recreated the frame. */
+  setDocument: (id: string) => void
   /** Shows a model's figures; `keepToggles` carries wireframe and guides over from the last model. */
   showModel: (summary: ModelSummary, actions: ViewerActions, notices: string[], keepToggles: boolean) => void
 }
@@ -242,6 +244,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     showError: (message) => showOverlay(message, true),
     setPending,
     openAnnotation: annotations.open,
+    setDocument: annotations.setDocument,
     showModel: (summary, modelActions, notices, keepToggles) => {
       clearFigures()
       actions = modelActions

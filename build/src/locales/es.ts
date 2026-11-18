@@ -101,6 +101,7 @@ export const ES: Messages = {
   noteChange: 'Cambiar',
   noteQuestion: 'Pregunta',
   noteRadius: 'Radio',
+  noteZone: 'Seleccionar también las piezas cercanas (zona)',
   noteAdd: 'Añadir',
   noteCancel: 'Cancelar',
   noteUnnamed: 'Parte sin nombre',

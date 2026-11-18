@@ -6,6 +6,7 @@ import { ParseAbortedError, ParseTimeoutError, parseGltfModel, stopDecoders } fr
 import { loadedModelExcess } from './loaded-model-limits.ts'
 import { checkModelOffThread } from './model-check.ts'
 import { disposeObjectTree } from './model-disposal.ts'
+import { documentId } from './document-id.ts'
 import type { Refusal } from './model-refusal.ts'
 import { resolveLocale } from './locale.ts'
 import { createTranslate } from './messages.ts'
@@ -236,6 +237,7 @@ async function load(orcaDocument: OrcaDocument): Promise<void> {
 
   try {
     const summary = await target.show(model, replacing)
+    ui.setDocument(documentId(data))
     if (summary.otherSceneCount > 0) {
       notices.push(t('otherScenes', { count: count(summary.otherSceneCount) }, summary.otherSceneCount))
     }

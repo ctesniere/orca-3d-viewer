@@ -149,6 +149,7 @@ describe('source', () => {
     'model-check-worker.ts': /\bself\.postMessage\(/g,
     // The one way the frame reaches the worker; the worker's own test pins what it will do.
     'notes-send.ts': /\beditorFrame\(\)\?\.plugin\b/g,
+    'notes-storage.ts': /\blocalStorage\.(getItem\(KEY\)|setItem\(KEY, JSON\.stringify\(stored\)\))/g,
     'viewer-preferences.ts': /\blocalStorage\.(getItem\(KEY\)|setItem\(KEY, JSON\.stringify\(preferences\)\))/g
   }
 

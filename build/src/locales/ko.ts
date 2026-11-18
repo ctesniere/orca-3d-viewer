@@ -88,6 +88,7 @@ export const KO: Messages = {
   noteChange: '변경',
   noteQuestion: '질문',
   noteRadius: '반경',
+  noteZone: '주변 부품도 선택(영역)',
   noteAdd: '추가',
   noteCancel: '취소',
   noteUnnamed: '이름 없는 부분',

@@ -2,6 +2,7 @@ import {
   AmbientLight,
   Box3,
   CanvasTexture,
+  DoubleSide,
   Group,
   DirectionalLight,
   HemisphereLight,
@@ -11,6 +12,7 @@ import {
   type Material,
   Mesh,
   MeshBasicMaterial,
+  MeshStandardMaterial,
   NeutralToneMapping,
   NoColorSpace,
   type Object3D,
@@ -28,6 +30,7 @@ import {
   Timer,
   Vector2,
   Vector3,
+  Vector4,
   WebGLRenderer
 } from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
@@ -36,6 +39,7 @@ import type { ModelPick, Vec3 } from './annotation.ts'
 import type { GltfModel } from './gltf-model-parse.ts'
 import { type Lighting, DEFAULT_LIGHTING, lightLevels } from './lighting.ts'
 import { disposeObjectTree } from './model-disposal.ts'
+import { findPiece, namePath, pieceIdOf } from './piece-id.ts'
 import { measureModel, type ModelStats } from './model-stats.ts'
 import { createSceneAnimation, type SceneAnimation } from './scene-animation.ts'
 import { createSceneGuides, type ModelDimensions, type SceneGuides } from './scene-guides.ts'
@@ -53,7 +57,14 @@ export type ModelSummary = {
   otherSceneCount: number
 }
 
-export type SpotMarker = { point: Vec3; radius: number }
+export type SpotMarker = {
+  point: Vec3
+  /** Whether the note covers a zone: its sphere is drawn, and the pieces within `radius` are lit red with the clicked one. */
+  zone: boolean
+  radius: number
+  /** The clicked piece, which is always lit red. */
+  pieceId: string
+}
 
 export type ModelStage = {
   /** The renderer KTX2 textures are transcoded for. */
@@ -73,8 +84,8 @@ export type ModelStage = {
   playAnimation: (clipIndex: number) => void
   setAnimationPaused: (paused: boolean) => void
   /**
-   * Draws each note as a numbered badge inside a translucent sphere of its radius, and the spot being
-   * written (if any) as a dot in a stronger sphere. Replaces whatever was drawn before.
+   * Draws each note as a numbered badge, with its piece (or, for a zone, the pieces within its radius) lit
+   * red and the zone's sphere; the spot being written, if any, is a dot. Replaces whatever was drawn before.
    */
   setAnnotationMarkers: (notes: SpotMarker[], pending: SpotMarker | null) => void
   /** Whether a click on the model picks a spot; off, a click does nothing. */
@@ -104,6 +115,11 @@ const MARKER_SCREEN_FRACTION = 0.012
 // A numbered badge's height as a fraction of the view's; the badge keeps that size however far the camera is.
 const BADGE_SIZE = 0.05
 const MARKER_COLOR = 0xff3b30
+// Why darker than the markers: the lights and the tone mapping wash a bright red out towards pink.
+const RED_PIECE_COLOR = 0xb81d13
+// How many zones the shader tests at most, and how strongly it tints what lies inside them.
+const MAX_ZONES = 16
+const ZONE_TINT = '0.8'
 
 type Shown = {
   model: Object3D
@@ -240,6 +256,8 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
   const ambient = new AmbientLight(0xffffff, 0)
   scene.add(hemisphere, keyLight, ambient)
   let shown: Shown | null = null
+  // Set once the zone tint exists; the lighting below runs first and tells it when the model's materials changed.
+  let syncZoneCopies: () => void = () => {}
   let lighting: Lighting = DEFAULT_LIGHTING
   let modelHasLights = false
   // Why metalness is set to 0 in the flat type: a metal has no colour of its own, only reflections, so with
@@ -257,6 +275,7 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
         ownMetalness.delete(material)
       }
     }
+    syncZoneCopies()
   }
   const applyLighting = (): void => {
     applyMaterialLook()
@@ -343,15 +362,14 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
     const hit = raycaster.intersectObject(root, true).find((entry) => isVisible(entry.object, root) && surfaceOf(entry)?.visible !== false)
     if (!hit) return null
 
-    const path: string[] = []
-    for (let node: Object3D | null = hit.object; node; node = node === root ? null : node.parent) path.unshift(node.name)
+    const path = namePath(hit.object, root)
     const point = finite(hit.point)
     const localPoint = finite(hit.object.worldToLocal(hit.point.clone()))
     const normal = hit.face ? finite(hit.face.normal.clone().transformDirection(hit.object.matrixWorld)) : null
     const position = finite(camera.position)
     const target = finite(controls.target)
     if (!point || !localPoint || !position || !target) return null
-    return { point, localPoint, normal, path, material: surfaceOf(hit)?.name || null, camera: { position, target } }
+    return { point, localPoint, normal, pieceId: pieceIdOf(hit.object, root), path, material: surfaceOf(hit)?.name || null, camera: { position, target } }
   }
 
   const offset = (clientX: number, clientY: number): { x: number; y: number } => {
@@ -386,6 +404,110 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
   canvas.addEventListener('pointerup', onPointerUp)
   canvas.addEventListener('pointercancel', onPointerCancel)
   canvas.addEventListener('keydown', onKeyDown)
+
+  // --- Red pieces, and red zones ---
+  // Why swapping the material: the piece keeps its shape, its skin and its animation, and only its look changes.
+  let red: MeshStandardMaterial | null = null
+  let wireframeOn = false
+  const redMaterial = (): MeshStandardMaterial => {
+    red ??= new MeshStandardMaterial({ color: RED_PIECE_COLOR, emissive: MARKER_COLOR, emissiveIntensity: 0.12, roughness: 0.7, metalness: 0, side: DoubleSide })
+    red.wireframe = wireframeOn
+    return red
+  }
+
+  // A zone is a sphere, and only the part of the model inside it is tinted red: each fragment compares its
+  // position with the zones. The pieces a zone touches get a copy of their own material that does this, so
+  // they keep their textures, their skin and their animation, and no piece is painted whole.
+  const zoneCentres = Array.from({ length: MAX_ZONES }, () => new Vector4())
+  const zoneUniforms = { uZones: { value: zoneCentres }, uZoneCount: { value: 0 } }
+  const tinted = (material: Material): Material => {
+    const copy = material.clone()
+    copy.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, zoneUniforms)
+      shader.vertexShader = `varying vec3 vZonePosition;\n${shader.vertexShader.replace(
+        '#include <project_vertex>',
+        '#include <project_vertex>\n\tvZonePosition = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;'
+      )}`
+      shader.fragmentShader = `varying vec3 vZonePosition;\nuniform vec4 uZones[${MAX_ZONES}];\nuniform int uZoneCount;\n${shader.fragmentShader.replace(
+        '#include <dithering_fragment>',
+        `#include <dithering_fragment>
+	float inZone = 0.0;
+	for ( int i = 0; i < ${MAX_ZONES}; i ++ ) {
+		if ( i >= uZoneCount ) break;
+		if ( distance( vZonePosition, uZones[ i ].xyz ) <= uZones[ i ].w ) inZone = 1.0;
+	}
+	gl_FragColor.rgb = mix( gl_FragColor.rgb, vec3( 1.0, 0.23, 0.19 ), ${ZONE_TINT} * inZone );`
+      )}`
+    }
+    copy.customProgramCacheKey = () => 'zone-tint'
+    return copy
+  }
+
+  type Lit = { own: Material | Material[]; copies: Material[] }
+  const redPieces = new Map<Mesh, Lit>()
+  const zonePieces = new Map<Mesh, Lit>()
+  const restore = (pieces: Map<Mesh, Lit>, wanted: Set<Mesh>): void => {
+    for (const [mesh, lit] of pieces) {
+      if (wanted.has(mesh)) continue
+      mesh.material = lit.own
+      for (const copy of lit.copies) copy.dispose()
+      pieces.delete(mesh)
+    }
+  }
+  /** Lights `whole` pieces red, and tints the zones on `touched` ones; a piece in both is red whole. */
+  const lightPieces = (whole: Set<Mesh>, touched: Set<Mesh>): void => {
+    const zoned = new Set([...touched].filter((mesh) => !whole.has(mesh)))
+    restore(redPieces, whole)
+    restore(zonePieces, zoned)
+    // Why restored first: a piece that changes kind has its own material back before the new one is put on.
+    for (const mesh of whole) {
+      if (redPieces.has(mesh)) continue
+      redPieces.set(mesh, { own: mesh.material, copies: [] })
+      mesh.material = redMaterial()
+    }
+    for (const mesh of zoned) {
+      if (zonePieces.has(mesh)) continue
+      const own = mesh.material
+      const copies = (Array.isArray(own) ? own : [own]).map(tinted)
+      zonePieces.set(mesh, { own, copies })
+      mesh.material = Array.isArray(own) ? copies : copies[0]!
+    }
+    syncCopies()
+  }
+  // Why copied again: the wireframe and the flat lighting change the model's own materials, and a copy must follow.
+  const syncCopies = (): void => {
+    for (const { own, copies } of zonePieces.values()) {
+      ;(Array.isArray(own) ? own : [own]).forEach((original, index) => {
+        const copy = copies[index] as Material & { metalness?: number; wireframe?: boolean }
+        const source = original as Material & { metalness?: number; wireframe?: boolean }
+        if (copy && typeof source.metalness === 'number') copy.metalness = source.metalness
+        if (copy && typeof source.wireframe === 'boolean') copy.wireframe = source.wireframe
+      })
+    }
+  }
+  syncZoneCopies = syncCopies
+  const setZones = (spots: SpotMarker[]): void => {
+    const zones = spots.filter((spot) => spot.zone && spot.radius > 0).slice(0, MAX_ZONES)
+    zones.forEach((spot, index) => zoneCentres[index]!.set(...spot.point, spot.radius))
+    zoneUniforms.uZoneCount.value = zones.length
+  }
+  const pieceNamed = (id: string): Mesh | null => {
+    const found = shown ? findPiece(id, shown.model) : null
+    return found && (found as Mesh).isMesh ? (found as Mesh) : null
+  }
+  /** The meshes of the model whose box comes within `radius` of `point`. */
+  const piecesWithin = (point: Vec3, radius: number): Mesh[] => {
+    const near: Mesh[] = []
+    const box = new Box3()
+    const at = new Vector3(...point)
+    shown?.model.traverse((node) => {
+      const mesh = node as Mesh
+      const bounds = mesh.isMesh ? mesh.geometry?.boundingBox : null
+      if (!bounds || !isVisible(node, shown!.model)) return
+      if (box.copy(bounds).applyMatrix4(mesh.matrixWorld).distanceToPoint(at) <= radius) near.push(mesh)
+    })
+    return near
+  }
 
   // A white disc with the note's number, drawn once per note; the sprite then keeps its size on screen.
   const badgeTexture = (index: number): CanvasTexture => {
@@ -425,9 +547,15 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
   }
   const setAnnotationMarkers = (notes: SpotMarker[], pending: SpotMarker | null): void => {
     clearMarkers()
+    const spots = [...notes, ...(pending ? [pending] : [])]
+    setZones(spots)
+    lightPieces(
+      new Set(spots.filter((spot) => !spot.zone).flatMap((spot) => pieceNamed(spot.pieceId) ?? [])),
+      new Set(spots.filter((spot) => spot.zone && spot.radius > 0).flatMap((spot) => piecesWithin(spot.point, spot.radius)))
+    )
     // Why not depth-tested: the markers say where a spot is, and a surface in front must not hide it.
     const area = (spot: SpotMarker, opacity: number): void => {
-      if (!(spot.radius > 0)) return
+      if (!spot.zone || !(spot.radius > 0)) return
       const sphere = new Mesh(
         new SphereGeometry(spot.radius, 24, 16),
         new MeshBasicMaterial({ color: MARKER_COLOR, transparent: true, opacity, depthWrite: false, toneMapped: false })
@@ -437,7 +565,7 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
       markers.add(sphere)
     }
     notes.forEach((note, index) => {
-      area(note, 0.16)
+      area(note, 0.07)
       const badge = new Sprite(new SpriteMaterial({ map: badgeTexture(index + 1), depthTest: false, sizeAttenuation: false, toneMapped: false }))
       badge.position.set(...note.point)
       badge.scale.setScalar(BADGE_SIZE)
@@ -445,7 +573,7 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
       markers.add(badge)
     })
     if (pending) {
-      area(pending, 0.28)
+      area(pending, 0.12)
       pendingDot = new Mesh(
         new SphereGeometry(1, 16, 12),
         new MeshBasicMaterial({ color: MARKER_COLOR, depthTest: false, transparent: true, opacity: 0.9, toneMapped: false })
@@ -539,6 +667,8 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
   }
 
   const release = (entry: Shown): void => {
+    // Why first: the model's own materials are put back before they are released with it.
+    lightPieces(new Set(), new Set())
     entry.animation.dispose()
     scene.remove(entry.model, entry.guides.group)
     disposeObjectTree(entry.model)
@@ -616,9 +746,12 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
       render()
     },
     setWireframe: (enabled) => {
+      wireframeOn = enabled
+      if (red) red.wireframe = enabled
       for (const material of shown?.materials ?? []) {
         if ('wireframe' in material) material.wireframe = enabled
       }
+      syncCopies()
       render()
     },
     setLighting: (next) => {
@@ -651,6 +784,7 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
       clear()
       clearMarkers()
       scene.remove(markers)
+      red?.dispose()
       canvas.removeEventListener('pointerdown', onPointerDown)
       canvas.removeEventListener('pointerup', onPointerUp)
       canvas.removeEventListener('pointercancel', onPointerCancel)

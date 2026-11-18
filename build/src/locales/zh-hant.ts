@@ -83,6 +83,7 @@ export const ZH_HANT: Messages = {
   noteChange: '變更',
   noteQuestion: '提問',
   noteRadius: '半徑',
+  noteZone: '同時選取周圍的零件（區域）',
   noteAdd: '新增',
   noteCancel: '取消',
   noteUnnamed: '未命名部分',

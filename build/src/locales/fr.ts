@@ -108,6 +108,7 @@ export const FR: Messages = {
   noteChange: 'Modifier',
   noteQuestion: 'Question',
   noteRadius: 'Rayon',
+  noteZone: 'Sélectionner aussi les pièces voisines (zone)',
   noteAdd: 'Ajouter',
   noteCancel: 'Annuler',
   noteUnnamed: 'Partie sans nom',

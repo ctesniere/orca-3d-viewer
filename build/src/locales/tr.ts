@@ -95,6 +95,7 @@ export const TR: Messages = {
   noteChange: 'Değiştir',
   noteQuestion: 'Soru',
   noteRadius: 'Yarıçap',
+  noteZone: 'Çevredeki parçaları da seç (bölge)',
   noteAdd: 'Ekle',
   noteCancel: 'İptal',
   noteUnnamed: 'Adsız parça',
