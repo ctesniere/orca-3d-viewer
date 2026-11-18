@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { annotationSummary, MAX_COMMENT_CHARACTERS, type ModelPick, type Note, notesMessage } from '../src/annotation.ts'
+import { annotationSummary, MAX_COMMENT_CHARACTERS, MAX_FILE_PATH_CHARACTERS, type ModelPick, type Note, notesMessage } from '../src/annotation.ts'
 
 const pick = (overrides: Partial<ModelPick> = {}): ModelPick => ({
   point: [0.123456789, 1, -2],
@@ -33,6 +33,15 @@ describe('notes message', () => {
       '- Surface normal: 0, 1, 0',
       '- Camera at 1, 2, 3, looking at 0, 0, 0'
     ])
+  })
+
+  it('puts the file the person named on the first line, cleaned and shortened, and nothing when it is empty', () => {
+    const first = (path: string) => notesMessage([note()], path).split('\n')
+    assert.deepEqual(first('assets/robot.glb').slice(0, 3), ['File: assets/robot.glb', '', "A user reviewing a 3D model in Orca's 3D viewer left 1 note."])
+    assert.equal(first('  a\n\u202eb  ')[0], 'File: ab')
+    assert.ok(first('x'.repeat(1000))[0]!.length <= 'File: '.length + MAX_FILE_PATH_CHARACTERS)
+    assert.equal(first('   ')[0], "A user reviewing a 3D model in Orca's 3D viewer left 1 note.")
+    assert.equal(notesMessage([note()]), notesMessage([note()], ''))
   })
 
   it('lists several notes in order and says which are questions', () => {

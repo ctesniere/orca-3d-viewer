@@ -96,6 +96,8 @@ export const KO: Messages = {
   notesCopy: '복사',
   notesClear: '모든 주석 삭제',
   notesToggle: '주석 표시 또는 숨기기',
+  notesFile: '파일',
+  notesFilePlaceholder: '파일 경로(예: assets/robot.glb)',
   noteRemove: '주석 {{index}} 삭제',
   sendTo: '노트 보낼 곳',
   sendRunning: '실행 중인 에이전트',

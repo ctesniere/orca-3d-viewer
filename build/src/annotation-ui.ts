@@ -1,7 +1,7 @@
 // The controls for annotating the model: a popover that asks what to change at a clicked spot, and a list at
 // the bottom right of the notes so far, which can be copied or sent to an agent.
 import { ChevronDown, ChevronRight, CircleHelp, Copy, MessageSquarePlus, Pencil, Send, Trash2, X } from 'lucide'
-import { annotationSummary, type ModelPick, type Note, type NoteKind, notesMessage, MAX_COMMENT_CHARACTERS } from './annotation.ts'
+import { annotationSummary, MAX_COMMENT_CHARACTERS, MAX_FILE_PATH_CHARACTERS, type ModelPick, type Note, type NoteKind, notesMessage } from './annotation.ts'
 import { cleanText, formatCount } from './display-format.ts'
 import { element, icon } from './dom.ts'
 import type { Translate } from './messages.ts'
@@ -30,8 +30,8 @@ export type AnnotationUi = {
   setVisible: (visible: boolean) => void
 }
 
-// The default radius is this fraction of the model's diagonal: big enough to see, small enough to be a spot.
-const DEFAULT_RADIUS_FRACTION = 0.05
+// Why 0: a note marks one point until the person widens it, and a radius nobody asked for would only be noise.
+const DEFAULT_RADIUS = 0
 const MAX_REASON_CHARACTERS = 160
 // Names Orca gives its agents, as people know them.
 const AGENT_NAMES: Record<string, string> = {
@@ -53,6 +53,8 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
   let size: ModelSize = { diagonal: 1, unit: 'm', scale: 1 }
   let visible = true
   let expanded = true
+  // Orca never tells the viewer where the file is, so the person names it; it is kept for this tab only.
+  let filePath = ''
 
   // --- The popover that asks for a note ---
   const target = element('strong', { className: 'popover-target' })
@@ -76,14 +78,13 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
     element('div', { className: 'popover-actions' }, [cancelButton, addButton])
   ])
 
-  const defaultRadius = (): number => size.diagonal * DEFAULT_RADIUS_FRACTION
   const showRadius = (meters: number): void => {
     radiusInput.value = String(Number((meters / size.scale).toPrecision(2)))
   }
   /** The radius written in the field, in metres; the default when the field holds no number. */
   const radius = (): number => {
     const written = radiusInput.valueAsNumber * size.scale
-    return Number.isFinite(written) && written >= 0 ? Math.min(written, size.diagonal) : defaultRadius()
+    return Number.isFinite(written) && written >= 0 ? Math.min(written, size.diagonal) : DEFAULT_RADIUS
   }
   const setKind = (next: NoteKind): void => {
     kind = next
@@ -106,6 +107,15 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
   ])
   const copyButton = element('button', { type: 'button', className: 'text-button with-icon' }, [icon(Copy), t('notesCopy')])
   const clearButton = element('button', { type: 'button', className: 'tool', title: t('notesClear'), ariaLabel: t('notesClear') }, [icon(Trash2)])
+  const fileInput = element('input', {
+    type: 'text',
+    className: 'notes-file-input',
+    placeholder: t('notesFilePlaceholder'),
+    ariaLabel: t('notesFile'),
+    maxLength: MAX_FILE_PATH_CHARACTERS,
+    spellcheck: false
+  })
+  const fileRow = element('label', { className: 'notes-file' }, [element('span', { textContent: t('notesFile') }), fileInput])
   const status = element('p', { className: 'notes-status', role: 'status', hidden: true })
   const list = element('ol', { className: 'notes-list' })
   // Why off screen rather than hidden: a copy needs a selection, and a hidden element cannot have one.
@@ -114,6 +124,7 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
   const panel = element('div', { className: 'notes-panel', hidden: true }, [
     menu,
     element('div', { className: 'notes-head' }, [toggle, sendButton, copyButton, clearButton]),
+    fileRow,
     status,
     list,
     copyBuffer
@@ -131,6 +142,7 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
     toggle.replaceChildren(icon(expanded ? ChevronDown : ChevronRight, 16), t('notesCount', { count: formatCount(notes.length, locale) }, notes.length))
     toggle.setAttribute('aria-expanded', String(expanded))
     list.hidden = !expanded
+    fileRow.hidden = !expanded
     list.replaceChildren(
       ...notes.map((note, index) => {
         const remove = element('button', { type: 'button', className: 'tool note-remove', title: t('noteRemove', { index: index + 1 }), ariaLabel: t('noteRemove', { index: index + 1 }) }, [icon(X)])
@@ -177,7 +189,7 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
     closeMenu()
     say(null)
     try {
-      await sendNotes(to, notesMessage(notes))
+      await sendNotes(to, notesMessage(notes, filePath))
       say(t('sendDone', { agent: label }))
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
@@ -216,7 +228,7 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
   }
 
   const copy = (): void => {
-    copyBuffer.value = notesMessage(notes)
+    copyBuffer.value = notesMessage(notes, filePath)
     copyBuffer.select()
     // Why execCommand: Orca's frames refuse navigator.clipboard, and allow a copy inside a click.
     let copied = false
@@ -263,6 +275,9 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
     expanded = !expanded
     renderNotes()
   })
+  fileInput.addEventListener('input', () => {
+    filePath = fileInput.value
+  })
   sendButton.addEventListener('click', () => void openMenu())
   copyButton.addEventListener('click', copy)
   clearButton.addEventListener('click', () => {
@@ -292,7 +307,7 @@ export function createAnnotationUi(t: Translate, locale: string, host: Annotatio
         text.value = ''
         addButton.disabled = true
         setKind('change')
-        showRadius(defaultRadius())
+        showRadius(DEFAULT_RADIUS)
         say(null)
       }
       closeMenu()

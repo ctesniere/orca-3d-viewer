@@ -91,6 +91,8 @@ export const ZH_HANT: Messages = {
   notesCopy: '複製',
   notesClear: '刪除所有註解',
   notesToggle: '顯示或隱藏註解',
+  notesFile: '檔案',
+  notesFilePlaceholder: '檔案路徑，例如 assets/robot.glb',
   noteRemove: '刪除註解 {{index}}',
   sendTo: '將註解傳送到',
   sendRunning: '執行中的代理',

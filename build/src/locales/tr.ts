@@ -103,6 +103,8 @@ export const TR: Messages = {
   notesCopy: 'Kopyala',
   notesClear: 'Tüm notları sil',
   notesToggle: 'Notları göster veya gizle',
+  notesFile: 'Dosya',
+  notesFilePlaceholder: 'Dosyanın yolu, örn. assets/robot.glb',
   noteRemove: '{{index}}. notu kaldır',
   sendTo: 'Notları şuraya gönder',
   sendRunning: 'Çalışan ajanlar',

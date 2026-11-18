@@ -91,6 +91,8 @@ export const ZH_HANS: Messages = {
   notesCopy: '复制',
   notesClear: '删除所有批注',
   notesToggle: '显示或隐藏批注',
+  notesFile: '文件',
+  notesFilePlaceholder: '文件路径，例如 assets/robot.glb',
   noteRemove: '删除批注 {{index}}',
   sendTo: '将批注发送到',
   sendRunning: '正在运行的代理',

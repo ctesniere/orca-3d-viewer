@@ -116,6 +116,8 @@ export const FR: Messages = {
   notesCopy: 'Copier',
   notesClear: 'Supprimer toutes les annotations',
   notesToggle: 'Afficher ou masquer les annotations',
+  notesFile: 'Fichier',
+  notesFilePlaceholder: 'Chemin du fichier, ex. assets/robot.glb',
   noteRemove: 'Supprimer l’annotation {{index}}',
   sendTo: 'Envoyer les notes à',
   sendRunning: 'Agents en cours',

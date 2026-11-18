@@ -108,6 +108,8 @@ export const DE: Messages = {
   notesCopy: 'Kopieren',
   notesClear: 'Alle Anmerkungen löschen',
   notesToggle: 'Anmerkungen ein- oder ausblenden',
+  notesFile: 'Datei',
+  notesFilePlaceholder: 'Pfad der Datei, z. B. assets/robot.glb',
   noteRemove: 'Anmerkung {{index}} entfernen',
   sendTo: 'Notizen senden an',
   sendRunning: 'Laufende Agenten',

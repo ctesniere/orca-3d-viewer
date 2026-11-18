@@ -107,6 +107,8 @@ export const RU: Messages = {
   notesCopy: 'Копировать',
   notesClear: 'Удалить все заметки',
   notesToggle: 'Показать или скрыть заметки',
+  notesFile: 'Файл',
+  notesFilePlaceholder: 'Путь к файлу, например assets/robot.glb',
   noteRemove: 'Удалить заметку {{index}}',
   sendTo: 'Отправить заметки',
   sendRunning: 'Работающие агенты',

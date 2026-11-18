@@ -57,7 +57,7 @@ describe('annotating the model', () => {
     assert.equal(await clickModel(), true)
     assert.equal(await popover().locator('textarea').getAttribute('placeholder'), TITLE)
     assert.equal(await button(/^Add/).isDisabled(), true)
-    assert.notEqual(await popover().locator('input').inputValue(), '')
+    assert.equal(await popover().locator('input').inputValue(), '0')
     assert.match((await popover().locator('.radius-unit').textContent()) ?? '', /^(mm|m|µm|km)$/)
     assert.equal(await button(/^Change/).getAttribute('aria-pressed'), 'true')
 
@@ -105,10 +105,27 @@ describe('annotating the model', () => {
     await addNote('Second', { question: true, radius: '0.5' })
     await button(/^Copy/).click()
     const copied = await panel().locator('.copy-buffer').inputValue()
+    assert.match(copied, /^A user reviewing/)
     assert.match(copied, /left 2 notes\./)
     assert.match(copied, /^Note 1 \(change\): First$/m)
     assert.match(copied, /^Note 2 \(question\): Second$/m)
     assert.match(copied, /- Spot in the viewer's scene \(metres, Y up\): .*, radius /)
+  })
+
+  it('starts the copied and the sent text with the file the person names', async () => {
+    await frame.page.evaluate(() => {
+      window.__orcaTest.workerAnswers['notes.targets'] = { running: [], launchable: ['claude'] }
+      window.__orcaTest.workerAnswers['notes.send'] = { sent: true }
+    })
+    await modeButton().click()
+    await addNote('Fix it')
+    await panel().getByRole('textbox', { name: 'File' }).fill('assets/robot.glb')
+    await button(/^Copy/).click()
+    assert.match(await panel().locator('.copy-buffer').inputValue(), /^File: assets\/robot\.glb\n\nA user reviewing/)
+    await button('Send').click()
+    await frame.page.getByRole('menuitem', { name: 'Claude' }).click()
+    const sent = (await frame.page.evaluate(() => window.__orcaTest.workerCalls)).find((call) => call.name === 'notes.send')
+    assert.match((sent?.input as { text: string }).text, /^File: assets\/robot\.glb\n/)
   })
 
   it('sends the notes to a running agent, or to a new one, through the worker', async () => {
