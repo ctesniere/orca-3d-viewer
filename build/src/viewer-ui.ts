@@ -1,6 +1,8 @@
-import { Axis3d, Box, Camera, createElement, EyeOff, Grid3x3, type IconNode, Info, ListTree, MessageSquarePlus, Moon, Pause, Play, RotateCcw, Sun } from 'lucide'
+import { Axis3d, Box, Camera, createElement, EyeOff, Grid3x3, type IconNode, Info, ListTree, MessageSquarePlus, Moon, Pause, Play, RotateCcw, Scissors, Sun } from 'lucide'
 import type { ModelPick } from './annotation.ts'
 import { createAnnotationUi } from './annotation-ui.ts'
+import { createClippingUi } from './clipping-ui.ts'
+import type { Clipping } from './clipping.ts'
 import { element, icon } from './dom.ts'
 import { createIsolationUi } from './isolation-ui.ts'
 import { createLightingUi } from './lighting-ui.ts'
@@ -20,6 +22,7 @@ export type ViewerActions = {
   playAnimation: (clipIndex: number) => void
   setAnimationPaused: (paused: boolean) => void
   setLighting: (lighting: Lighting) => void
+  setClipping: (clipping: Clipping) => void
   setAnnotationMarkers: (notes: SpotMarker[], pending: SpotMarker | null) => void
   setPickMode: (mode: PickMode) => void
   showPiece: (pieceId: string) => void
@@ -71,6 +74,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const annotate = toolButton(MessageSquarePlus, t('annotateMode'))
   const isolateButton = toolButton(EyeOff, t('isolateMode'))
   const outlineButton = toolButton(ListTree, t('outlineTitle'))
+  const clippingButton = toolButton(Scissors, t('clippingTitle'))
   const lightingButton = toolButton(Sun, t('lighting'))
   const theme = toolButton(Moon, t('darkTheme'))
   const screenshotButton = toolButton(Camera, t('screenshot'))
@@ -84,7 +88,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const gridCell = element('span', { className: 'figure' })
   const pending = element('span', { className: 'pending', role: 'status', hidden: true })
   const toolbar = element('footer', { className: 'toolbar' }, [
-    element('div', { className: 'group' }, [reset, wireframe, guides, annotate, isolateButton, outlineButton, lightingButton, theme, screenshotButton, detailsButton]),
+    element('div', { className: 'group' }, [reset, wireframe, guides, annotate, isolateButton, outlineButton, clippingButton, lightingButton, theme, screenshotButton, detailsButton]),
     animationGroup,
     stats,
     dimensions,
@@ -113,6 +117,17 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     },
     () => setPressed(lightingButton, false)
   )
+  let clipping = loadPreferences().clipping
+  const clippingUi = createClippingUi(
+    t,
+    clipping,
+    (next) => {
+      clipping = next
+      actions?.setClipping(next)
+      save()
+    },
+    () => setPressed(clippingButton, false)
+  )
   const annotations = createAnnotationUi(
     t,
     locale,
@@ -132,7 +147,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     () => setPressed(outlineButton, false)
   )
   root.replaceChildren(
-    element('div', { className: 'stage' }, [viewport, overlay, details, annotations.popover, annotations.panel, isolation.panel, outliner.panel, lightingUi.panel]),
+    element('div', { className: 'stage' }, [viewport, overlay, details, annotations.popover, annotations.panel, isolation.panel, outliner.panel, clippingUi.panel, lightingUi.panel]),
     notice,
     toolbar
   )
@@ -141,6 +156,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     annotations.close(false)
     lightingUi.close()
     outliner.close()
+    clippingUi.close()
     detailsText.value = report()
     copyStatus.textContent = ''
     details.hidden = false
@@ -173,7 +189,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   let dark = saved.dark
   let wireframeOn = saved.wireframe
   let guidesOn = saved.guides
-  const save = (): void => savePreferences({ dark, wireframe: wireframeOn, guides: guidesOn, lighting })
+  const save = (): void => savePreferences({ dark, wireframe: wireframeOn, guides: guidesOn, lighting, clipping })
   // Why not saved with the other toggles: it should not turn itself on in the next file someone opens.
   let annotating = false
   let isolating = false
@@ -190,7 +206,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     play.ariaLabel = title
   }
   const setToolsEnabled = (enabled: boolean): void => {
-    for (const button of [reset, wireframe, guides, annotate, isolateButton, outlineButton, lightingButton, screenshotButton]) button.disabled = !enabled
+    for (const button of [reset, wireframe, guides, annotate, isolateButton, outlineButton, clippingButton, lightingButton, screenshotButton]) button.disabled = !enabled
   }
 
   reset.addEventListener('click', () => actions?.resetView())
@@ -232,14 +248,25 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     details.hidden = true
     annotations.close(false)
     lightingUi.close()
+    clippingUi.close()
     outliner.toggle()
     setPressed(outlineButton, true)
+  })
+  clippingButton.addEventListener('click', () => {
+    if (clippingUi.isOpen()) return clippingUi.toggle()
+    details.hidden = true
+    annotations.close(false)
+    lightingUi.close()
+    outliner.close()
+    clippingUi.toggle()
+    setPressed(clippingButton, true)
   })
   lightingButton.addEventListener('click', () => {
     if (lightingUi.isOpen()) return lightingUi.toggle()
     details.hidden = true
     annotations.close(false)
     outliner.close()
+    clippingUi.close()
     lightingUi.toggle()
     setPressed(lightingButton, true)
   })
@@ -288,6 +315,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     annotations.close(false)
     lightingUi.close()
     outliner.close()
+    clippingUi.close()
     annotations.setVisible(false)
     isolation.setVisible(false)
     clearFigures()
@@ -325,6 +353,8 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
         guidesOn = last.guides
         lighting = last.lighting
         lightingUi.set(lighting)
+        clipping = last.clipping
+        clippingUi.set(clipping)
       }
       paused = false
       setPressed(wireframe, wireframeOn)
@@ -333,6 +363,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
       setPressed(isolateButton, isolating)
       modelActions.setPickMode(pickMode())
       modelActions.setLighting(lighting)
+      modelActions.setClipping(clipping)
       if (!summary.wireframeAvailable) {
         wireframeOn = false
         setPressed(wireframe, false)
