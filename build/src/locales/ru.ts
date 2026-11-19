@@ -73,6 +73,7 @@ export const RU: Messages = {
   resetView: 'Сбросить вид',
   wireframe: 'Каркас',
   wireframeTooLarge: 'Для такой большой модели каркас недоступен',
+  uvChecker: 'Проверка UV',
   guides: 'Сетка и оси',
   darkTheme: 'Тёмная тема',
   screenshot: 'Сохранить снимок экрана',

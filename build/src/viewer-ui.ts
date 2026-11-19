@@ -1,4 +1,4 @@
-import { Axis3d, Box, Camera, createElement, EyeOff, Grid3x3, type IconNode, Info, ListTree, MessageSquarePlus, Moon, Pause, Play, RotateCcw, Scissors, Sun } from 'lucide'
+import { Axis3d, Box, Camera, createElement, EyeOff, Grid2x2, Grid3x3, type IconNode, Info, ListTree, MessageSquarePlus, Moon, Pause, Play, RotateCcw, Scissors, Sun } from 'lucide'
 import type { ModelPick } from './annotation.ts'
 import { createAnnotationUi } from './annotation-ui.ts'
 import { createClippingUi } from './clipping-ui.ts'
@@ -18,6 +18,7 @@ import { loadPreferences, savePreferences } from './viewer-preferences.ts'
 export type ViewerActions = {
   resetView: () => void
   setWireframe: (enabled: boolean) => void
+  setUvChecker: (enabled: boolean) => void
   setGuidesVisible: (visible: boolean) => void
   playAnimation: (clipIndex: number) => void
   setAnimationPaused: (paused: boolean) => void
@@ -79,6 +80,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
 
   const reset = toolButton(RotateCcw, t('resetView'))
   const wireframe = toolButton(Grid3x3, t('wireframe'))
+  const uvChecker = toolButton(Grid2x2, t('uvChecker'))
   const guides = toolButton(Axis3d, t('guides'))
   const annotate = toolButton(MessageSquarePlus, t('annotateMode'))
   const isolateButton = toolButton(EyeOff, t('isolateMode'))
@@ -94,7 +96,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     VIEW_OPTIONS.map((view) => element('option', { value: view, textContent: t(VIEW_LABELS[view]) }))
   )
   const play = element('button', { type: 'button', className: 'tool' })
-  const animationSelect = element('select', { className: 'select', ariaLabel: t('animation') })
+  const animationSelect = element('select', { className: 'select animation-select', ariaLabel: t('animation') })
   const animationName = element('span', { className: 'clip-name' })
   const animationGroup = element('div', { className: 'group', hidden: true }, [play, animationSelect, animationName])
   const stats = element('span', { className: 'figure' })
@@ -102,7 +104,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const gridCell = element('span', { className: 'figure' })
   const pending = element('span', { className: 'pending', role: 'status', hidden: true })
   const toolbar = element('footer', { className: 'toolbar' }, [
-    element('div', { className: 'group' }, [reset, wireframe, guides, annotate, isolateButton, outlineButton, clippingButton, lightingButton, theme, screenshotButton, detailsButton]),
+    element('div', { className: 'group' }, [reset, wireframe, uvChecker, guides, annotate, isolateButton, outlineButton, clippingButton, lightingButton, theme, screenshotButton, detailsButton]),
     viewSelect,
     animationGroup,
     stats,
@@ -204,7 +206,8 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   let dark = saved.dark
   let wireframeOn = saved.wireframe
   let guidesOn = saved.guides
-  const save = (): void => savePreferences({ dark, wireframe: wireframeOn, guides: guidesOn, lighting, clipping })
+  let uvCheckerOn = saved.uvChecker
+  const save = (): void => savePreferences({ dark, wireframe: wireframeOn, guides: guidesOn, uvChecker: uvCheckerOn, lighting, clipping })
   // Why not saved with the other toggles: it should not turn itself on in the next file someone opens.
   let annotating = false
   let isolating = false
@@ -224,7 +227,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     play.ariaLabel = title
   }
   const setToolsEnabled = (enabled: boolean): void => {
-    for (const button of [reset, wireframe, guides, annotate, isolateButton, outlineButton, clippingButton, lightingButton, screenshotButton]) button.disabled = !enabled
+    for (const button of [reset, wireframe, uvChecker, guides, annotate, isolateButton, outlineButton, clippingButton, lightingButton, screenshotButton]) button.disabled = !enabled
     viewSelect.disabled = !enabled
   }
 
@@ -241,6 +244,12 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     wireframeOn = !wireframeOn
     setPressed(wireframe, wireframeOn)
     actions?.setWireframe(wireframeOn)
+    save()
+  })
+  uvChecker.addEventListener('click', () => {
+    uvCheckerOn = !uvCheckerOn
+    setPressed(uvChecker, uvCheckerOn)
+    actions?.setUvChecker(uvCheckerOn)
     save()
   })
   guides.addEventListener('click', () => {
@@ -378,6 +387,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
         const last = loadPreferences()
         wireframeOn = last.wireframe
         guidesOn = last.guides
+        uvCheckerOn = last.uvChecker
         lighting = last.lighting
         lightingUi.set(lighting)
         clipping = last.clipping
@@ -385,6 +395,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
       }
       paused = false
       setPressed(wireframe, wireframeOn)
+      setPressed(uvChecker, uvCheckerOn)
       setPressed(guides, guidesOn)
       setPressed(annotate, annotating)
       setPressed(isolateButton, isolating)
@@ -400,6 +411,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
         setPressed(wireframe, false)
       }
       modelActions.setWireframe(wireframeOn)
+      modelActions.setUvChecker(uvCheckerOn)
       modelActions.setGuidesVisible(guidesOn)
       overlay.hidden = true
       toolbar.hidden = false

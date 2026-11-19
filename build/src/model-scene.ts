@@ -2,6 +2,8 @@ import {
   AmbientLight,
   Box3,
   CanvasTexture,
+  Color,
+  DataTexture,
   DoubleSide,
   Group,
   DirectionalLight,
@@ -46,6 +48,7 @@ import { disposeObjectTree } from './model-disposal.ts'
 import { type Clipping, clippingPlane, DEFAULT_CLIPPING } from './clipping.ts'
 import { buildOutline, type OutlineNode } from './outliner.ts'
 import { orthoFrame, type OrthoPreset } from './ortho-views.ts'
+import { checkerPixels, CHECKER_SIZE } from './uv-checker.ts'
 import { findPiece, namePath, pieceIdOf } from './piece-id.ts'
 import { measureModel, type ModelStats } from './model-stats.ts'
 import { createSceneAnimation, type SceneAnimation } from './scene-animation.ts'
@@ -96,6 +99,8 @@ export type ModelStage = {
   clear: () => void
   resetView: () => void
   setWireframe: (enabled: boolean) => void
+  /** Puts a checker pattern on every piece in place of its own texture, to see its UVs and texel density. */
+  setUvChecker: (enabled: boolean) => void
   /** Cuts away one side of the model along an axis, to see what is inside it. */
   setClipping: (clipping: Clipping) => void
   /** Switches between the free-orbit perspective camera and a flat front, top or side view, without perspective. */
@@ -318,6 +323,39 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
         metal.metalness = ownMetalness.get(material)!
         ownMetalness.delete(material)
       }
+    }
+    syncZoneCopies()
+  }
+  let uvCheckerOn = false
+  let checkerTexture: DataTexture | null = null
+  const checker = (): DataTexture => {
+    if (!checkerTexture) {
+      checkerTexture = new DataTexture(checkerPixels(), CHECKER_SIZE, CHECKER_SIZE)
+      checkerTexture.colorSpace = SRGBColorSpace
+      checkerTexture.needsUpdate = true
+    }
+    return checkerTexture
+  }
+  // Why kept, not just overwritten: turning the checker off must bring back whatever map and colour a
+  // piece had. The colour is reset to white too, or its own tint would still show through the checker.
+  const ownLook = new WeakMap<Material, { map: Texture | null; color: Color | null }>()
+  const applyUvChecker = (): void => {
+    for (const material of shown?.materials ?? []) {
+      const textured = material as Material & { map?: Texture | null; color?: Color }
+      if (!('map' in textured)) continue
+      if (uvCheckerOn) {
+        if (!ownLook.has(material)) ownLook.set(material, { map: textured.map ?? null, color: textured.color?.clone() ?? null })
+        textured.map = checker()
+        textured.color?.setRGB(1, 1, 1)
+      } else if (ownLook.has(material)) {
+        const look = ownLook.get(material)!
+        textured.map = look.map
+        if (look.color) textured.color?.copy(look.color)
+        ownLook.delete(material)
+      } else {
+        continue
+      }
+      textured.needsUpdate = true
     }
     syncZoneCopies()
   }
@@ -566,10 +604,15 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
   const syncCopies = (): void => {
     for (const { own, copies } of zonePieces.values()) {
       ;(Array.isArray(own) ? own : [own]).forEach((original, index) => {
-        const copy = copies[index] as Material & { metalness?: number; wireframe?: boolean }
-        const source = original as Material & { metalness?: number; wireframe?: boolean }
+        const copy = copies[index] as Material & { metalness?: number; wireframe?: boolean; map?: Texture | null; color?: Color }
+        const source = original as Material & { metalness?: number; wireframe?: boolean; map?: Texture | null; color?: Color }
         if (copy && typeof source.metalness === 'number') copy.metalness = source.metalness
         if (copy && typeof source.wireframe === 'boolean') copy.wireframe = source.wireframe
+        if (copy && 'map' in source && copy.map !== source.map) {
+          copy.map = source.map
+          copy.needsUpdate = true
+        }
+        if (copy?.color && source.color && !copy.color.equals(source.color)) copy.color.copy(source.color)
       })
     }
   }
@@ -893,6 +936,7 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
       controls.object = camera
       shown = next
       applyMaterialLook()
+      applyUvChecker()
       scene.add(next.model, next.guides.group)
       if (!(keepView && alike)) frame(next.center, next.radius)
       if (restore) putCameraAt(restore)
@@ -922,6 +966,11 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
         if ('wireframe' in material) material.wireframe = enabled
       }
       syncCopies()
+      render()
+    },
+    setUvChecker: (enabled) => {
+      uvCheckerOn = enabled
+      applyUvChecker()
       render()
     },
     setLighting: (next) => {

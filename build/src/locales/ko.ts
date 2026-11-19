@@ -62,6 +62,7 @@ export const KO: Messages = {
   resetView: '보기 초기화',
   wireframe: '와이어프레임',
   wireframeTooLarge: '모델이 너무 커서 와이어프레임을 사용할 수 없습니다',
+  uvChecker: 'UV 체커',
   guides: '그리드 및 축',
   darkTheme: '다크 테마',
   screenshot: '스크린샷 저장',

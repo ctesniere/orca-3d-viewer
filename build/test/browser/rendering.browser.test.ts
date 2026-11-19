@@ -144,7 +144,7 @@ describe('rendering', () => {
     const state = await frame.open({ text: embeddedGltfText({ animationNames: ['Walk', 'Run'] }) })
     assert.equal(state.kind, 'model')
     assert.deepEqual(state.kind === 'model' && state.animations, ['Walk', 'Run', 'All clips'])
-    await frame.page.locator('.toolbar select').selectOption({ label: 'All clips' })
+    await frame.page.locator('.toolbar .animation-select').selectOption({ label: 'All clips' })
     assertContained(await frame.report())
   })
 

@@ -75,6 +75,7 @@ export const ES: Messages = {
   resetView: 'Restablecer vista',
   wireframe: 'Alambre',
   wireframeTooLarge: 'El modo alambre no está disponible en modelos tan grandes',
+  uvChecker: 'Comprobador de UV',
   guides: 'Cuadrícula y ejes',
   darkTheme: 'Tema oscuro',
   screenshot: 'Guardar una captura de pantalla',
