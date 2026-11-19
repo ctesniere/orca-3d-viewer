@@ -41,6 +41,7 @@ import { type Lighting, DEFAULT_LIGHTING, lightLevels } from './lighting.ts'
 import { saveView, type SavedView } from './camera-storage.ts'
 import { createIsolation, type HiddenPiece } from './isolation.ts'
 import { disposeObjectTree } from './model-disposal.ts'
+import { buildOutline, type OutlineNode } from './outliner.ts'
 import { findPiece, namePath, pieceIdOf } from './piece-id.ts'
 import { measureModel, type ModelStats } from './model-stats.ts'
 import { createSceneAnimation, type SceneAnimation } from './scene-animation.ts'
@@ -61,6 +62,7 @@ export type ModelSummary = {
 
 export type PickMode = 'off' | 'annotate' | 'isolate'
 export type { HiddenPiece }
+export type { OutlineNode }
 
 export type SpotMarker = {
   point: Vec3
@@ -105,6 +107,10 @@ export type ModelStage = {
   showPiece: (pieceId: string) => void
   /** Shows every piece `setPickMode('isolate')` hid. */
   showAllHidden: () => void
+  /** Hides the piece `pieceId` names, or shows it again if it is already hidden: for the outliner's eye icon. */
+  toggleHidden: (pieceId: string) => void
+  /** Moves the camera to frame just the piece `pieceId` names, as resetView does for the whole model. */
+  focusPiece: (pieceId: string) => void
   /** The current view, with every note's badge, as a PNG data URL; null if the context is lost. */
   captureScreenshot: () => string | null
   dispose: () => void
@@ -117,6 +123,8 @@ export type StageEvents = {
   onPick: (pick: ModelPick, at: { x: number; y: number }) => void
   /** The pieces `setPickMode('isolate')` is hiding changed: a click hid or showed one, or a model replaced the last. */
   onHiddenPiecesChange: (hidden: HiddenPiece[]) => void
+  /** The model's scene graph, from its root down; empty once it is replaced. */
+  onOutlineChange: (tree: OutlineNode | null, truncated: boolean) => void
 }
 
 // Why cap: past 2, each step multiplies the pixels shaded for little visible gain.
@@ -712,13 +720,18 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
   canvas.addEventListener('webglcontextlost', onContextLost)
   canvas.addEventListener('webglcontextrestored', onContextRestored)
 
-  const frame = (center: Vector3, radius: number): void => {
+  // Why apart from `frame`: focusing on a single piece must not shrink how far the orbit can still zoom
+  // out, which `frame` sets from the radius it is given.
+  const focusOn = (center: Vector3, radius: number): void => {
     const distance = radius / Math.sin((camera.fov * Math.PI) / 360)
     camera.position.copy(center).add(new Vector3(0.6, 0.4, 1).normalize().multiplyScalar(distance))
     controls.target.copy(center)
+    controls.update()
+  }
+  const frame = (center: Vector3, radius: number): void => {
+    focusOn(center, radius)
     controls.minDistance = radius * 1e-3
     controls.maxDistance = radius * 100
-    controls.update()
   }
 
   /** Moves the camera to `view` if it is a place the orbit limits allow, as set by the framing just before. */
@@ -746,6 +759,7 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
     isolation.clear()
     shown = null
     notifyHidden()
+    events.onOutlineChange(null, false)
     render()
   }
 
@@ -807,6 +821,8 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
       if (restore) putCameraAt(restore)
       updateClipping()
       render()
+      const outline = buildOutline(next.model)
+      events.onOutlineChange(outline.tree, outline.truncated)
       return summary
     },
     clear,
@@ -862,6 +878,23 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
     showAllHidden: () => {
       isolation.showAll()
       notifyHidden()
+      render()
+    },
+    toggleHidden: (pieceId) => {
+      if (!shown) return
+      const node = findPiece(pieceId, shown.model)
+      if (!node) return
+      isolation.toggle(node, shown.model)
+      notifyHidden()
+      render()
+    },
+    focusPiece: (pieceId) => {
+      if (!shown) return
+      const node = findPiece(pieceId, shown.model)
+      if (!node) return
+      const { bounds } = boundsOf(node)
+      focusOn(bounds.getCenter(new Vector3()), Math.max(bounds.getSize(new Vector3()).length() / 2, 1e-6))
+      updateClipping()
       render()
     },
     captureScreenshot: () => {

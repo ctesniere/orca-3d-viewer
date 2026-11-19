@@ -1,4 +1,4 @@
-import { Axis3d, Box, Camera, createElement, EyeOff, Grid3x3, type IconNode, Info, MessageSquarePlus, Moon, Pause, Play, RotateCcw, Sun } from 'lucide'
+import { Axis3d, Box, Camera, createElement, EyeOff, Grid3x3, type IconNode, Info, ListTree, MessageSquarePlus, Moon, Pause, Play, RotateCcw, Sun } from 'lucide'
 import type { ModelPick } from './annotation.ts'
 import { createAnnotationUi } from './annotation-ui.ts'
 import { element, icon } from './dom.ts'
@@ -7,7 +7,8 @@ import { createLightingUi } from './lighting-ui.ts'
 import type { Lighting } from './lighting.ts'
 import { cleanName, formatCount, lengthFormat } from './display-format.ts'
 import type { Translate } from './messages.ts'
-import type { HiddenPiece, ModelSummary, PickMode, SpotMarker } from './model-scene.ts'
+import type { HiddenPiece, ModelSummary, OutlineNode, PickMode, SpotMarker } from './model-scene.ts'
+import { createOutlinerUi } from './outliner-ui.ts'
 import { screenshotFilename } from './screenshot.ts'
 import { ALL_CLIPS } from './scene-animation.ts'
 import { loadPreferences, savePreferences } from './viewer-preferences.ts'
@@ -23,6 +24,8 @@ export type ViewerActions = {
   setPickMode: (mode: PickMode) => void
   showPiece: (pieceId: string) => void
   showAllHidden: () => void
+  toggleHidden: (pieceId: string) => void
+  focusPiece: (pieceId: string) => void
   captureScreenshot: () => string | null
 }
 
@@ -38,6 +41,8 @@ export type ViewerUi = {
   setDocument: (id: string) => void
   /** Shows the pieces an isolate-mode click has hidden, so each (or all of them) can be shown again. */
   setHiddenPieces: (pieces: HiddenPiece[]) => void
+  /** Shows the model's scene graph in the outliner panel. */
+  setOutline: (tree: OutlineNode | null, truncated: boolean) => void
   /** Shows a model's figures; `keepToggles` carries wireframe and guides over from the last model. */
   showModel: (summary: ModelSummary, actions: ViewerActions, notices: string[], keepToggles: boolean) => void
 }
@@ -65,6 +70,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const guides = toolButton(Axis3d, t('guides'))
   const annotate = toolButton(MessageSquarePlus, t('annotateMode'))
   const isolateButton = toolButton(EyeOff, t('isolateMode'))
+  const outlineButton = toolButton(ListTree, t('outlineTitle'))
   const lightingButton = toolButton(Sun, t('lighting'))
   const theme = toolButton(Moon, t('darkTheme'))
   const screenshotButton = toolButton(Camera, t('screenshot'))
@@ -78,7 +84,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const gridCell = element('span', { className: 'figure' })
   const pending = element('span', { className: 'pending', role: 'status', hidden: true })
   const toolbar = element('footer', { className: 'toolbar' }, [
-    element('div', { className: 'group' }, [reset, wireframe, guides, annotate, isolateButton, lightingButton, theme, screenshotButton, detailsButton]),
+    element('div', { className: 'group' }, [reset, wireframe, guides, annotate, isolateButton, outlineButton, lightingButton, theme, screenshotButton, detailsButton]),
     animationGroup,
     stats,
     dimensions,
@@ -119,8 +125,14 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     (pieceId) => actions?.showPiece(pieceId),
     () => actions?.showAllHidden()
   )
+  const outliner = createOutlinerUi(
+    t,
+    (pieceId) => actions?.focusPiece(pieceId),
+    (pieceId) => actions?.toggleHidden(pieceId),
+    () => setPressed(outlineButton, false)
+  )
   root.replaceChildren(
-    element('div', { className: 'stage' }, [viewport, overlay, details, annotations.popover, annotations.panel, isolation.panel, lightingUi.panel]),
+    element('div', { className: 'stage' }, [viewport, overlay, details, annotations.popover, annotations.panel, isolation.panel, outliner.panel, lightingUi.panel]),
     notice,
     toolbar
   )
@@ -128,6 +140,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const openDetails = (): void => {
     annotations.close(false)
     lightingUi.close()
+    outliner.close()
     detailsText.value = report()
     copyStatus.textContent = ''
     details.hidden = false
@@ -177,7 +190,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     play.ariaLabel = title
   }
   const setToolsEnabled = (enabled: boolean): void => {
-    for (const button of [reset, wireframe, guides, annotate, isolateButton, lightingButton, screenshotButton]) button.disabled = !enabled
+    for (const button of [reset, wireframe, guides, annotate, isolateButton, outlineButton, lightingButton, screenshotButton]) button.disabled = !enabled
   }
 
   reset.addEventListener('click', () => actions?.resetView())
@@ -214,10 +227,19 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     setPressed(isolateButton, isolating)
     actions?.setPickMode(pickMode())
   })
+  outlineButton.addEventListener('click', () => {
+    if (outliner.isOpen()) return outliner.toggle()
+    details.hidden = true
+    annotations.close(false)
+    lightingUi.close()
+    outliner.toggle()
+    setPressed(outlineButton, true)
+  })
   lightingButton.addEventListener('click', () => {
     if (lightingUi.isOpen()) return lightingUi.toggle()
     details.hidden = true
     annotations.close(false)
+    outliner.close()
     lightingUi.toggle()
     setPressed(lightingButton, true)
   })
@@ -265,6 +287,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const showOverlay = (text: string, isError: boolean): void => {
     annotations.close(false)
     lightingUi.close()
+    outliner.close()
     annotations.setVisible(false)
     isolation.setVisible(false)
     clearFigures()
@@ -288,7 +311,11 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     setPending,
     openAnnotation: annotations.open,
     setDocument: annotations.setDocument,
-    setHiddenPieces: isolation.setHidden,
+    setHiddenPieces: (pieces) => {
+      isolation.setHidden(pieces)
+      outliner.setHidden(new Set(pieces.map((piece) => piece.pieceId)))
+    },
+    setOutline: outliner.setTree,
     showModel: (summary, modelActions, notices, keepToggles) => {
       clearFigures()
       actions = modelActions
