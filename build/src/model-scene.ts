@@ -16,6 +16,7 @@ import {
   NeutralToneMapping,
   NoColorSpace,
   type Object3D,
+  OrthographicCamera,
   PerspectiveCamera,
   Plane,
   PMREMGenerator,
@@ -44,6 +45,7 @@ import { createIsolation, type HiddenPiece } from './isolation.ts'
 import { disposeObjectTree } from './model-disposal.ts'
 import { type Clipping, clippingPlane, DEFAULT_CLIPPING } from './clipping.ts'
 import { buildOutline, type OutlineNode } from './outliner.ts'
+import { orthoFrame, type OrthoPreset } from './ortho-views.ts'
 import { findPiece, namePath, pieceIdOf } from './piece-id.ts'
 import { measureModel, type ModelStats } from './model-stats.ts'
 import { createSceneAnimation, type SceneAnimation } from './scene-animation.ts'
@@ -65,6 +67,7 @@ export type ModelSummary = {
 export type PickMode = 'off' | 'annotate' | 'isolate'
 export type { HiddenPiece }
 export type { OutlineNode }
+export type CameraView = 'perspective' | OrthoPreset
 
 export type SpotMarker = {
   point: Vec3
@@ -95,6 +98,8 @@ export type ModelStage = {
   setWireframe: (enabled: boolean) => void
   /** Cuts away one side of the model along an axis, to see what is inside it. */
   setClipping: (clipping: Clipping) => void
+  /** Switches between the free-orbit perspective camera and a flat front, top or side view, without perspective. */
+  setCameraView: (view: CameraView) => void
   /** How the model is lit: the type of light, how strong, how bright the picture is and where the direct light comes from. */
   setLighting: (lighting: Lighting) => void
   setGuidesVisible: (visible: boolean) => void
@@ -342,29 +347,39 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
   buildEnvironment()
 
   const camera = new PerspectiveCamera(45, 1, 0.01, 1000)
-  const controls = new OrbitControls(camera, canvas)
+  const controls = new OrbitControls<PerspectiveCamera | OrthographicCamera>(camera, canvas)
   controls.listenToKeyEvents(canvas)
+  // A front, top or side view swaps this to an orthographic camera built on demand; resetView and loading
+  // another model always put the perspective one back.
+  let activeCamera: PerspectiveCamera | OrthographicCamera = camera
+  let orthoCamera: OrthographicCamera | null = null
+  // Kept so a resize can reframe the current preset at the new aspect, without re-reading which one it was.
+  let orthoFraming: { preset: OrthoPreset; center: Vector3; radius: number } | null = null
   let contextLost = false
   let onScreen = true
 
   const render = (): void => {
-    if (!contextLost && onScreen) renderer.render(scene, camera)
+    if (!contextLost && onScreen) renderer.render(scene, activeCamera)
   }
   // Why from the model's centre, not the orbit target: panning away from the model must not clip it.
   const updateClipping = (): void => {
     const center = shown?.center ?? controls.target
     const radius = shown?.radius ?? 1
-    const distance = camera.position.distanceTo(center)
-    camera.far = distance + radius * 4
+    const distance = activeCamera.position.distanceTo(center)
+    activeCamera.far = distance + radius * 4
     // Why the floor at far / 1e4: a 24-bit depth buffer cannot separate surfaces past that ratio.
-    camera.near = Math.max(distance - radius * 4, camera.far / 1e4, 1e-6)
-    camera.updateProjectionMatrix()
+    activeCamera.near = Math.max(distance - radius * 4, activeCamera.far / 1e4, 1e-6)
+    activeCamera.updateProjectionMatrix()
   }
   const markers = new Group()
   scene.add(markers)
   let pendingDot: Mesh | null = null
   const updateMarker = (): void => {
-    pendingDot?.scale.setScalar(camera.position.distanceTo(pendingDot.position) * MARKER_SCREEN_FRACTION)
+    if (!pendingDot) return
+    // Why not distance for an orthographic view: nothing shrinks with distance in one, so the frustum's
+    // own width stands in for it.
+    const scale = activeCamera === camera ? camera.position.distanceTo(pendingDot.position) : orthoCamera!.right - orthoCamera!.left
+    pendingDot.scale.setScalar(scale * MARKER_SCREEN_FRACTION)
   }
   // Why remembered after a pause and when the page is hidden: a drag changes the view many times a second, and
   // the frame may be recreated the moment the person leaves the tab, without another event to save on.
@@ -408,7 +423,7 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
     const rect = canvas.getBoundingClientRect()
     if (rect.width === 0 || rect.height === 0) return null
     pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, 1 - ((clientY - rect.top) / rect.height) * 2)
-    raycaster.setFromCamera(pointer, camera)
+    raycaster.setFromCamera(pointer, activeCamera)
     // Why scaled by the model: a point or a line is a pixel wide, so it needs some reach to be hit at all.
     raycaster.params.Points.threshold = shown.radius * 0.01
     raycaster.params.Line.threshold = shown.radius * 0.01
@@ -423,7 +438,7 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
     const point = finite(hit.point)
     const localPoint = finite(hit.object.worldToLocal(hit.point.clone()))
     const normal = hit.face ? finite(hit.face.normal.clone().transformDirection(hit.object.matrixWorld)) : null
-    const position = finite(camera.position)
+    const position = finite(activeCamera.position)
     const target = finite(controls.target)
     if (!point || !localPoint || !position || !target) return null
     return { point, localPoint, normal, pieceId: pieceIdOf(hit.object, root), path, material: surfaceOf(hit)?.name || null, camera: { position, target } }
@@ -700,6 +715,7 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
     renderer.setSize(width, height)
     camera.aspect = width / height
     camera.updateProjectionMatrix()
+    if (orthoCamera && orthoFraming) applyOrthoFraming(orthoFraming.preset, orthoFraming.center, orthoFraming.radius)
     render()
   }
   const observer = new ResizeObserver(resize)
@@ -753,6 +769,42 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
     camera.position.set(...position)
     controls.target.set(...target)
     controls.update()
+  }
+
+  // Why 0.01: the same near plane the perspective camera starts with, close enough for any model's scale.
+  const ORTHO_NEAR = 0.01
+  /** Builds or moves the orthographic camera to frame `center`/`radius` for `preset`, at the view's own aspect. */
+  const applyOrthoFraming = (preset: OrthoPreset, center: Vector3, radius: number): void => {
+    const rect = canvas.getBoundingClientRect()
+    const framed = orthoFrame(preset, [center.x, center.y, center.z], radius, rect.height > 0 ? rect.width / rect.height : 1)
+    orthoCamera ??= new OrthographicCamera()
+    orthoCamera.position.set(...framed.position)
+    orthoCamera.up.set(...framed.up)
+    orthoCamera.left = framed.left
+    orthoCamera.right = framed.right
+    orthoCamera.top = framed.top
+    orthoCamera.bottom = framed.bottom
+    orthoCamera.near = ORTHO_NEAR
+    orthoCamera.far = radius * 8 + 1
+    orthoCamera.lookAt(center)
+    orthoCamera.updateProjectionMatrix()
+    orthoFraming = { preset, center: center.clone(), radius }
+  }
+  const setCameraView = (view: CameraView): void => {
+    if (view === 'perspective') {
+      activeCamera = camera
+      controls.object = camera
+      updateClipping()
+      return render()
+    }
+    if (!shown) return
+    applyOrthoFraming(view, shown.center, shown.radius)
+    activeCamera = orthoCamera!
+    controls.object = orthoCamera!
+    controls.target.copy(shown.center)
+    controls.update()
+    updateClipping()
+    render()
   }
 
   const release = (entry: Shown): void => {
@@ -835,6 +887,10 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
       modelHasLights = hasOwnLights(model.scene)
       applyLighting()
       clear()
+      // Why always: a saved view and the orbit limits the framing below sets are for the perspective
+      // camera, so a save arriving while a flat preset is on screen must not restore into the wrong one.
+      activeCamera = camera
+      controls.object = camera
       shown = next
       applyMaterialLook()
       scene.add(next.model, next.guides.group)
@@ -853,6 +909,8 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
       rememberView()
     },
     resetView: () => {
+      activeCamera = camera
+      controls.object = camera
       if (shown) frame(shown.center, shown.radius)
       updateClipping()
       render()
@@ -876,6 +934,7 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
       applySection()
       render()
     },
+    setCameraView,
     setGuidesVisible: (visible) => {
       if (shown) shown.guides.group.visible = visible
       render()
