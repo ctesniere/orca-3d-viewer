@@ -75,6 +75,7 @@ export const RU: Messages = {
   wireframeTooLarge: 'Для такой большой модели каркас недоступен',
   guides: 'Сетка и оси',
   darkTheme: 'Тёмная тема',
+  screenshot: 'Сохранить снимок экрана',
   details: 'Подробности',
   detailsTitle: 'Подробности для отчёта о проблеме',
   detailsNote:

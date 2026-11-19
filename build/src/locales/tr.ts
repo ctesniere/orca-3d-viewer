@@ -71,6 +71,7 @@ export const TR: Messages = {
   wireframeTooLarge: 'Bu kadar büyük bir modelde tel kafes kullanılamaz',
   guides: 'Izgara ve eksenler',
   darkTheme: 'Koyu tema',
+  screenshot: 'Ekran görüntüsünü kaydet',
   details: 'Ayrıntılar',
   detailsTitle: 'Sorun bildirimi için ayrıntılar',
   detailsNote:

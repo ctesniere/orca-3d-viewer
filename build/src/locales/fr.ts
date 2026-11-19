@@ -84,6 +84,7 @@ export const FR: Messages = {
   wireframeTooLarge: 'Mode filaire indisponible pour un modèle aussi volumineux',
   guides: 'Grille et axes',
   darkTheme: 'Thème sombre',
+  screenshot: 'Enregistrer une capture d’écran',
   details: 'Détails',
   detailsTitle: 'Détails à joindre à une issue',
   detailsNote:

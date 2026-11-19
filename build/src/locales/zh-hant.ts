@@ -60,6 +60,7 @@ export const ZH_HANT: Messages = {
   wireframeTooLarge: '模型過大，無法顯示線框',
   guides: '網格與座標軸',
   darkTheme: '深色主題',
+  screenshot: '儲存螢幕截圖',
   details: '詳情',
   detailsTitle: '用於回報 Issue 的詳情',
   detailsNote: '包括檢視器與瀏覽器版本、顯示卡資訊、最近的載入紀錄以及所有錯誤。不含模型資料，但錯誤訊息中引用的內容除外。',
