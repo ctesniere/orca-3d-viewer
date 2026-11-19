@@ -135,7 +135,8 @@ function stageFor(): ModelStage {
       if (stage && lastShown) showModel(lastShown.summary, stage, shownNotices, true)
     },
     onPick: (pick, at) => ui.openAnnotation(pick, at),
-    onHiddenPiecesChange: (hidden) => ui.setHiddenPieces(hidden)
+    onHiddenPiecesChange: (hidden) => ui.setHiddenPieces(hidden),
+    onOutlineChange: (tree, truncated) => ui.setOutline(tree, truncated)
   })
   return stage
 }
