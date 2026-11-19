@@ -76,6 +76,7 @@ export const DE: Messages = {
   wireframeTooLarge: 'Drahtgitter ist bei so großen Modellen nicht verfügbar',
   guides: 'Raster und Achsen',
   darkTheme: 'Dunkles Design',
+  screenshot: 'Screenshot speichern',
   details: 'Details',
   detailsTitle: 'Details für ein Issue',
   detailsNote:

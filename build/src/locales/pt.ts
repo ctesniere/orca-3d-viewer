@@ -75,6 +75,7 @@ export const PT: Messages = {
   wireframeTooLarge: 'Wireframe indisponível para um modelo deste tamanho',
   guides: 'Grade e eixos',
   darkTheme: 'Tema escuro',
+  screenshot: 'Salvar uma captura de tela',
   details: 'Detalhes',
   detailsTitle: 'Detalhes para relatar um problema',
   detailsNote:

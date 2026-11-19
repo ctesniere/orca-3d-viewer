@@ -1,4 +1,4 @@
-import { Axis3d, Box, createElement, Grid3x3, type IconNode, Info, MessageSquarePlus, Moon, Pause, Play, RotateCcw, Sun } from 'lucide'
+import { Axis3d, Box, Camera, createElement, Grid3x3, type IconNode, Info, MessageSquarePlus, Moon, Pause, Play, RotateCcw, Sun } from 'lucide'
 import type { ModelPick } from './annotation.ts'
 import { createAnnotationUi } from './annotation-ui.ts'
 import { element, icon } from './dom.ts'
@@ -7,6 +7,7 @@ import type { Lighting } from './lighting.ts'
 import { cleanName, formatCount, lengthFormat } from './display-format.ts'
 import type { Translate } from './messages.ts'
 import type { ModelSummary, SpotMarker } from './model-scene.ts'
+import { screenshotFilename } from './screenshot.ts'
 import { ALL_CLIPS } from './scene-animation.ts'
 import { loadPreferences, savePreferences } from './viewer-preferences.ts'
 
@@ -19,6 +20,7 @@ export type ViewerActions = {
   setLighting: (lighting: Lighting) => void
   setAnnotationMarkers: (notes: SpotMarker[], pending: SpotMarker | null) => void
   setPickingEnabled: (enabled: boolean) => void
+  captureScreenshot: () => string | null
 }
 
 export type ViewerUi = {
@@ -59,6 +61,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const annotate = toolButton(MessageSquarePlus, t('annotateMode'))
   const lightingButton = toolButton(Sun, t('lighting'))
   const theme = toolButton(Moon, t('darkTheme'))
+  const screenshotButton = toolButton(Camera, t('screenshot'))
   const detailsButton = toolButton(Info, t('details'))
   const play = element('button', { type: 'button', className: 'tool' })
   const animationSelect = element('select', { className: 'select', ariaLabel: t('animation') })
@@ -69,7 +72,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const gridCell = element('span', { className: 'figure' })
   const pending = element('span', { className: 'pending', role: 'status', hidden: true })
   const toolbar = element('footer', { className: 'toolbar' }, [
-    element('div', { className: 'group' }, [reset, wireframe, guides, annotate, lightingButton, theme, detailsButton]),
+    element('div', { className: 'group' }, [reset, wireframe, guides, annotate, lightingButton, theme, screenshotButton, detailsButton]),
     animationGroup,
     stats,
     dimensions,
@@ -156,7 +159,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     play.ariaLabel = title
   }
   const setToolsEnabled = (enabled: boolean): void => {
-    for (const button of [reset, wireframe, guides, annotate, lightingButton]) button.disabled = !enabled
+    for (const button of [reset, wireframe, guides, annotate, lightingButton, screenshotButton]) button.disabled = !enabled
   }
 
   reset.addEventListener('click', () => actions?.resetView())
@@ -195,6 +198,13 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     dark = !dark
     applyTheme()
     save()
+  })
+  screenshotButton.addEventListener('click', () => {
+    const image = actions?.captureScreenshot()
+    if (!image) return
+    // Why built here, not kept around: Orca's frames refuse navigator.clipboard, but a fresh link's
+    // default action still runs on click, with no need to add it to the page or ask the host for anything.
+    element('a', { href: image, download: screenshotFilename(new Date()) }).click()
   })
   play.addEventListener('click', () => {
     paused = !paused

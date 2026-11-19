@@ -77,6 +77,7 @@ export const ES: Messages = {
   wireframeTooLarge: 'El modo alambre no está disponible en modelos tan grandes',
   guides: 'Cuadrícula y ejes',
   darkTheme: 'Tema oscuro',
+  screenshot: 'Guardar una captura de pantalla',
   details: 'Detalles',
   detailsTitle: 'Detalles para informar de un problema',
   detailsNote:

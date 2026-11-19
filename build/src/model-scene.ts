@@ -97,6 +97,8 @@ export type ModelStage = {
   setAnnotationMarkers: (notes: SpotMarker[], pending: SpotMarker | null) => void
   /** Whether a click on the model picks a spot; off, a click does nothing. */
   setPickingEnabled: (enabled: boolean) => void
+  /** The current view, with every note's badge, as a PNG data URL; null if the context is lost. */
+  captureScreenshot: () => string | null
   dispose: () => void
 }
 
@@ -820,6 +822,17 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
       pickingEnabled = enabled
       press = null
       canvas.style.cursor = enabled ? 'crosshair' : ''
+    },
+    captureScreenshot: () => {
+      if (contextLost) return null
+      // Why rendered again here: reading the canvas right after this call is the only time the browser
+      // still guarantees its pixels, since the renderer is not asked to keep them past that (`preserveDrawingBuffer`).
+      render()
+      try {
+        return canvas.toDataURL('image/png')
+      } catch {
+        return null
+      }
     },
     dispose: () => {
       clear()
