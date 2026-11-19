@@ -1,12 +1,13 @@
-import { Axis3d, Box, Camera, createElement, Grid3x3, type IconNode, Info, MessageSquarePlus, Moon, Pause, Play, RotateCcw, Sun } from 'lucide'
+import { Axis3d, Box, Camera, createElement, EyeOff, Grid3x3, type IconNode, Info, MessageSquarePlus, Moon, Pause, Play, RotateCcw, Sun } from 'lucide'
 import type { ModelPick } from './annotation.ts'
 import { createAnnotationUi } from './annotation-ui.ts'
 import { element, icon } from './dom.ts'
+import { createIsolationUi } from './isolation-ui.ts'
 import { createLightingUi } from './lighting-ui.ts'
 import type { Lighting } from './lighting.ts'
 import { cleanName, formatCount, lengthFormat } from './display-format.ts'
 import type { Translate } from './messages.ts'
-import type { ModelSummary, SpotMarker } from './model-scene.ts'
+import type { HiddenPiece, ModelSummary, PickMode, SpotMarker } from './model-scene.ts'
 import { screenshotFilename } from './screenshot.ts'
 import { ALL_CLIPS } from './scene-animation.ts'
 import { loadPreferences, savePreferences } from './viewer-preferences.ts'
@@ -19,7 +20,9 @@ export type ViewerActions = {
   setAnimationPaused: (paused: boolean) => void
   setLighting: (lighting: Lighting) => void
   setAnnotationMarkers: (notes: SpotMarker[], pending: SpotMarker | null) => void
-  setPickingEnabled: (enabled: boolean) => void
+  setPickMode: (mode: PickMode) => void
+  showPiece: (pieceId: string) => void
+  showAllHidden: () => void
   captureScreenshot: () => string | null
 }
 
@@ -33,6 +36,8 @@ export type ViewerUi = {
   openAnnotation: (pick: ModelPick, at: { x: number; y: number }) => void
   /** Says which document is shown, so that its notes come back after Orca recreated the frame. */
   setDocument: (id: string) => void
+  /** Shows the pieces an isolate-mode click has hidden, so each (or all of them) can be shown again. */
+  setHiddenPieces: (pieces: HiddenPiece[]) => void
   /** Shows a model's figures; `keepToggles` carries wireframe and guides over from the last model. */
   showModel: (summary: ModelSummary, actions: ViewerActions, notices: string[], keepToggles: boolean) => void
 }
@@ -59,6 +64,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const wireframe = toolButton(Grid3x3, t('wireframe'))
   const guides = toolButton(Axis3d, t('guides'))
   const annotate = toolButton(MessageSquarePlus, t('annotateMode'))
+  const isolateButton = toolButton(EyeOff, t('isolateMode'))
   const lightingButton = toolButton(Sun, t('lighting'))
   const theme = toolButton(Moon, t('darkTheme'))
   const screenshotButton = toolButton(Camera, t('screenshot'))
@@ -72,7 +78,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const gridCell = element('span', { className: 'figure' })
   const pending = element('span', { className: 'pending', role: 'status', hidden: true })
   const toolbar = element('footer', { className: 'toolbar' }, [
-    element('div', { className: 'group' }, [reset, wireframe, guides, annotate, lightingButton, theme, screenshotButton, detailsButton]),
+    element('div', { className: 'group' }, [reset, wireframe, guides, annotate, isolateButton, lightingButton, theme, screenshotButton, detailsButton]),
     animationGroup,
     stats,
     dimensions,
@@ -107,7 +113,17 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     { showMarkers: (notes, pending) => actions?.setAnnotationMarkers(notes, pending) },
     () => viewport.querySelector('canvas')?.focus()
   )
-  root.replaceChildren(element('div', { className: 'stage' }, [viewport, overlay, details, annotations.popover, annotations.panel, lightingUi.panel]), notice, toolbar)
+  const isolation = createIsolationUi(
+    t,
+    locale,
+    (pieceId) => actions?.showPiece(pieceId),
+    () => actions?.showAllHidden()
+  )
+  root.replaceChildren(
+    element('div', { className: 'stage' }, [viewport, overlay, details, annotations.popover, annotations.panel, isolation.panel, lightingUi.panel]),
+    notice,
+    toolbar
+  )
 
   const openDetails = (): void => {
     annotations.close(false)
@@ -147,7 +163,9 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const save = (): void => savePreferences({ dark, wireframe: wireframeOn, guides: guidesOn, lighting })
   // Why not saved with the other toggles: it should not turn itself on in the next file someone opens.
   let annotating = false
+  let isolating = false
   let paused = false
+  const pickMode = (): PickMode => (annotating ? 'annotate' : isolating ? 'isolate' : 'off')
 
   const setPressed = (button: HTMLButtonElement, pressed: boolean): void => {
     button.setAttribute('aria-pressed', String(pressed))
@@ -159,7 +177,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     play.ariaLabel = title
   }
   const setToolsEnabled = (enabled: boolean): void => {
-    for (const button of [reset, wireframe, guides, annotate, lightingButton, screenshotButton]) button.disabled = !enabled
+    for (const button of [reset, wireframe, guides, annotate, isolateButton, lightingButton, screenshotButton]) button.disabled = !enabled
   }
 
   reset.addEventListener('click', () => actions?.resetView())
@@ -178,9 +196,23 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   })
   annotate.addEventListener('click', () => {
     annotating = !annotating
+    if (annotating && isolating) {
+      isolating = false
+      setPressed(isolateButton, false)
+    }
     setPressed(annotate, annotating)
-    actions?.setPickingEnabled(annotating)
+    actions?.setPickMode(pickMode())
     if (!annotating) annotations.close(false)
+  })
+  isolateButton.addEventListener('click', () => {
+    isolating = !isolating
+    if (isolating && annotating) {
+      annotating = false
+      setPressed(annotate, false)
+      annotations.close(false)
+    }
+    setPressed(isolateButton, isolating)
+    actions?.setPickMode(pickMode())
   })
   lightingButton.addEventListener('click', () => {
     if (lightingUi.isOpen()) return lightingUi.toggle()
@@ -234,6 +266,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     annotations.close(false)
     lightingUi.close()
     annotations.setVisible(false)
+    isolation.setVisible(false)
     clearFigures()
     overlay.hidden = false
     toolbar.hidden = isError
@@ -255,6 +288,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
     setPending,
     openAnnotation: annotations.open,
     setDocument: annotations.setDocument,
+    setHiddenPieces: isolation.setHidden,
     showModel: (summary, modelActions, notices, keepToggles) => {
       clearFigures()
       actions = modelActions
@@ -269,7 +303,8 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
       setPressed(wireframe, wireframeOn)
       setPressed(guides, guidesOn)
       setPressed(annotate, annotating)
-      modelActions.setPickingEnabled(annotating)
+      setPressed(isolateButton, isolating)
+      modelActions.setPickMode(pickMode())
       modelActions.setLighting(lighting)
       if (!summary.wireframeAvailable) {
         wireframeOn = false
@@ -318,6 +353,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
       annotations.setModelSize({ diagonal: Math.hypot(width, height, depth), unit: lengths.unit, scale: lengths.scale })
       annotations.setVisible(true)
       annotations.redraw()
+      isolation.setVisible(true)
       gridCell.hidden = !guidesOn
       gridCell.textContent = t('gridCell', { size: `${lengths.format(summary.gridCellSize)} ${lengths.unit}` })
       viewport.ariaLabel = t('viewportLabel', { summary: `${stats.textContent}, ${dimensions.textContent}` })
