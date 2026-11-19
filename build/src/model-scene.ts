@@ -39,6 +39,7 @@ import type { ModelPick, Vec3 } from './annotation.ts'
 import type { GltfModel } from './gltf-model-parse.ts'
 import { type Lighting, DEFAULT_LIGHTING, lightLevels } from './lighting.ts'
 import { saveView, type SavedView } from './camera-storage.ts'
+import { createIsolation, type HiddenPiece } from './isolation.ts'
 import { disposeObjectTree } from './model-disposal.ts'
 import { findPiece, namePath, pieceIdOf } from './piece-id.ts'
 import { measureModel, type ModelStats } from './model-stats.ts'
@@ -57,6 +58,9 @@ export type ModelSummary = {
   animationNames: string[]
   otherSceneCount: number
 }
+
+export type PickMode = 'off' | 'annotate' | 'isolate'
+export type { HiddenPiece }
 
 export type SpotMarker = {
   point: Vec3
@@ -95,8 +99,12 @@ export type ModelStage = {
    * red and the zone's sphere; the spot being written, if any, is a dot. Replaces whatever was drawn before.
    */
   setAnnotationMarkers: (notes: SpotMarker[], pending: SpotMarker | null) => void
-  /** Whether a click on the model picks a spot; off, a click does nothing. */
-  setPickingEnabled: (enabled: boolean) => void
+  /** What a click on the model does: nothing, opens the annotation popover, or hides the piece. */
+  setPickMode: (mode: PickMode) => void
+  /** Shows a piece `setPickMode('isolate')` hid, named by the id its own entry in the hidden list carries. */
+  showPiece: (pieceId: string) => void
+  /** Shows every piece `setPickMode('isolate')` hid. */
+  showAllHidden: () => void
   /** The current view, with every note's badge, as a PNG data URL; null if the context is lost. */
   captureScreenshot: () => string | null
   dispose: () => void
@@ -107,6 +115,8 @@ export type StageEvents = {
   onContextRestored: () => void
   /** The user clicked, without dragging, on the model; `at` is where, in CSS pixels from the view's corner. */
   onPick: (pick: ModelPick, at: { x: number; y: number }) => void
+  /** The pieces `setPickMode('isolate')` is hiding changed: a click hid or showed one, or a model replaced the last. */
+  onHiddenPiecesChange: (hidden: HiddenPiece[]) => void
 }
 
 // Why cap: past 2, each step multiplies the pixels shaded for little visible gain.
@@ -373,7 +383,7 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
     return Array.isArray(material) ? material[entry.face?.materialIndex ?? 0] : material
   }
   /** What the model has under a point of the canvas (CSS pixels, as pointer events give them), or null. */
-  const pickAt = (clientX: number, clientY: number): ModelPick | null => {
+  const hitAt = (clientX: number, clientY: number): Intersection | null => {
     if (!shown || contextLost) return null
     const rect = canvas.getBoundingClientRect()
     if (rect.width === 0 || rect.height === 0) return null
@@ -383,9 +393,12 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
     raycaster.params.Points.threshold = shown.radius * 0.01
     raycaster.params.Line.threshold = shown.radius * 0.01
     const root = shown.model
-    const hit = raycaster.intersectObject(root, true).find((entry) => isVisible(entry.object, root) && surfaceOf(entry)?.visible !== false)
-    if (!hit) return null
-
+    return raycaster.intersectObject(root, true).find((entry) => isVisible(entry.object, root) && surfaceOf(entry)?.visible !== false) ?? null
+  }
+  const pickAt = (clientX: number, clientY: number): ModelPick | null => {
+    const hit = hitAt(clientX, clientY)
+    if (!hit || !shown) return null
+    const root = shown.model
     const path = namePath(hit.object, root)
     const point = finite(hit.point)
     const localPoint = finite(hit.object.worldToLocal(hit.point.clone()))
@@ -400,28 +413,44 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
     const rect = canvas.getBoundingClientRect()
     return { x: clientX - rect.left, y: clientY - rect.top }
   }
+  // --- Isolating: an isolate-mode click hides the piece under it, to see what was behind it ---
+  const isolation = createIsolation()
+  const notifyHidden = (): void => events.onHiddenPiecesChange(isolation.list(shown?.model ?? null))
+  const pickedAt = (clientX: number, clientY: number): void => {
+    const hit = hitAt(clientX, clientY)
+    if (hit && shown) {
+      isolation.toggle(hit.object, shown.model)
+      notifyHidden()
+      render()
+    }
+  }
+
   // Why pointer events and a distance: OrbitControls turns a drag into an orbit, so only a press that stayed put is a click.
   let press: { id: number; x: number; y: number } | null = null
-  let pickingEnabled = false
+  let pickMode: PickMode = 'off'
   const onPointerDown = (event: PointerEvent): void => {
-    press = pickingEnabled && event.isPrimary && event.button === 0 ? { id: event.pointerId, x: event.clientX, y: event.clientY } : null
+    press = pickMode !== 'off' && event.isPrimary && event.button === 0 ? { id: event.pointerId, x: event.clientX, y: event.clientY } : null
   }
   const onPointerUp = (event: PointerEvent): void => {
     const start = press
     press = null
     if (!start || event.pointerId !== start.id || event.button !== 0) return
     if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > CLICK_SLOP_PX) return
+    if (pickMode === 'isolate') return pickedAt(event.clientX, event.clientY)
     const pick = pickAt(event.clientX, event.clientY)
     if (pick) events.onPick(pick, offset(event.clientX, event.clientY))
   }
   const onPointerCancel = (): void => {
     press = null
   }
-  // Why Enter picks the middle: someone who cannot point can still aim the camera, then annotate what is in the centre.
+  // Why Enter picks the middle: someone who cannot point can still aim the camera, then act on what is in the centre.
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (!pickingEnabled || event.key !== 'Enter' || event.repeat || event.altKey || event.ctrlKey || event.metaKey) return
+    if (pickMode === 'off' || event.key !== 'Enter' || event.repeat || event.altKey || event.ctrlKey || event.metaKey) return
     const rect = canvas.getBoundingClientRect()
-    const pick = pickAt(rect.left + rect.width / 2, rect.top + rect.height / 2)
+    const x = rect.left + rect.width / 2
+    const y = rect.top + rect.height / 2
+    if (pickMode === 'isolate') return pickedAt(x, y)
+    const pick = pickAt(x, y)
     if (pick) events.onPick(pick, { x: rect.width / 2, y: rect.height / 2 })
   }
   canvas.addEventListener('pointerdown', onPointerDown)
@@ -714,7 +743,9 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
     if (!shown) return
     renderer.setAnimationLoop(null)
     release(shown)
+    isolation.clear()
     shown = null
+    notifyHidden()
     render()
   }
 
@@ -818,10 +849,20 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
       render()
     },
     setAnnotationMarkers,
-    setPickingEnabled: (enabled) => {
-      pickingEnabled = enabled
+    setPickMode: (mode) => {
+      pickMode = mode
       press = null
-      canvas.style.cursor = enabled ? 'crosshair' : ''
+      canvas.style.cursor = mode !== 'off' ? 'crosshair' : ''
+    },
+    showPiece: (pieceId) => {
+      isolation.show(pieceId)
+      notifyHidden()
+      render()
+    },
+    showAllHidden: () => {
+      isolation.showAll()
+      notifyHidden()
+      render()
     },
     captureScreenshot: () => {
       if (contextLost) return null
