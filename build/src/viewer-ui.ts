@@ -8,8 +8,8 @@ import { createIsolationUi } from './isolation-ui.ts'
 import { createLightingUi } from './lighting-ui.ts'
 import type { Lighting } from './lighting.ts'
 import { cleanName, formatCount, lengthFormat } from './display-format.ts'
-import type { Translate } from './messages.ts'
-import type { HiddenPiece, ModelSummary, OutlineNode, PickMode, SpotMarker } from './model-scene.ts'
+import type { MessageKey, Translate } from './messages.ts'
+import type { CameraView, HiddenPiece, ModelSummary, OutlineNode, PickMode, SpotMarker } from './model-scene.ts'
 import { createOutlinerUi } from './outliner-ui.ts'
 import { screenshotFilename } from './screenshot.ts'
 import { ALL_CLIPS } from './scene-animation.ts'
@@ -23,6 +23,7 @@ export type ViewerActions = {
   setAnimationPaused: (paused: boolean) => void
   setLighting: (lighting: Lighting) => void
   setClipping: (clipping: Clipping) => void
+  setCameraView: (view: CameraView) => void
   setAnnotationMarkers: (notes: SpotMarker[], pending: SpotMarker | null) => void
   setPickMode: (mode: PickMode) => void
   showPiece: (pieceId: string) => void
@@ -54,6 +55,14 @@ function toolButton(iconNode: IconNode, title: string): HTMLButtonElement {
   return element('button', { type: 'button', className: 'tool', title, ariaLabel: title }, [icon(iconNode)])
 }
 
+const VIEW_OPTIONS: readonly CameraView[] = ['perspective', 'front', 'top', 'side']
+const VIEW_LABELS: Record<CameraView, MessageKey> = {
+  perspective: 'cameraViewPerspective',
+  front: 'cameraViewFront',
+  top: 'cameraViewTop',
+  side: 'cameraViewSide'
+}
+
 /** `report` builds the Details panel's text when the panel opens. */
 export function createViewerUi(root: HTMLElement, t: Translate, locale: string, report: () => string): ViewerUi {
   const animationLabel = (name: string | undefined, index: number): string =>
@@ -79,6 +88,11 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const theme = toolButton(Moon, t('darkTheme'))
   const screenshotButton = toolButton(Camera, t('screenshot'))
   const detailsButton = toolButton(Info, t('details'))
+  const viewSelect = element(
+    'select',
+    { className: 'select', ariaLabel: t('cameraView') },
+    VIEW_OPTIONS.map((view) => element('option', { value: view, textContent: t(VIEW_LABELS[view]) }))
+  )
   const play = element('button', { type: 'button', className: 'tool' })
   const animationSelect = element('select', { className: 'select', ariaLabel: t('animation') })
   const animationName = element('span', { className: 'clip-name' })
@@ -89,6 +103,7 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   const pending = element('span', { className: 'pending', role: 'status', hidden: true })
   const toolbar = element('footer', { className: 'toolbar' }, [
     element('div', { className: 'group' }, [reset, wireframe, guides, annotate, isolateButton, outlineButton, clippingButton, lightingButton, theme, screenshotButton, detailsButton]),
+    viewSelect,
     animationGroup,
     stats,
     dimensions,
@@ -194,6 +209,9 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   let annotating = false
   let isolating = false
   let paused = false
+  // Why not saved either: resetView and a new model both put the camera back to perspective (model-scene.ts
+  // does the same), so this would only ever show stale next time.
+  let cameraView: CameraView = 'perspective'
   const pickMode = (): PickMode => (annotating ? 'annotate' : isolating ? 'isolate' : 'off')
 
   const setPressed = (button: HTMLButtonElement, pressed: boolean): void => {
@@ -207,9 +225,18 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
   }
   const setToolsEnabled = (enabled: boolean): void => {
     for (const button of [reset, wireframe, guides, annotate, isolateButton, outlineButton, clippingButton, lightingButton, screenshotButton]) button.disabled = !enabled
+    viewSelect.disabled = !enabled
   }
 
-  reset.addEventListener('click', () => actions?.resetView())
+  reset.addEventListener('click', () => {
+    actions?.resetView()
+    cameraView = 'perspective'
+    viewSelect.value = cameraView
+  })
+  viewSelect.addEventListener('change', () => {
+    cameraView = VIEW_OPTIONS.find((view) => view === viewSelect.value) ?? cameraView
+    actions?.setCameraView(cameraView)
+  })
   wireframe.addEventListener('click', () => {
     wireframeOn = !wireframeOn
     setPressed(wireframe, wireframeOn)
@@ -361,6 +388,10 @@ export function createViewerUi(root: HTMLElement, t: Translate, locale: string, 
       setPressed(guides, guidesOn)
       setPressed(annotate, annotating)
       setPressed(isolateButton, isolating)
+      // Why always, unlike the toggles above: model-scene.ts puts every new model’s camera back to
+      // perspective itself, so the select must follow even when the other toggles carry over.
+      cameraView = 'perspective'
+      viewSelect.value = cameraView
       modelActions.setPickMode(pickMode())
       modelActions.setLighting(lighting)
       modelActions.setClipping(clipping)
