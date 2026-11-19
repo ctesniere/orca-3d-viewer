@@ -17,6 +17,7 @@ import {
   NoColorSpace,
   type Object3D,
   PerspectiveCamera,
+  Plane,
   PMREMGenerator,
   Raycaster,
   Scene,
@@ -41,6 +42,7 @@ import { type Lighting, DEFAULT_LIGHTING, lightLevels } from './lighting.ts'
 import { saveView, type SavedView } from './camera-storage.ts'
 import { createIsolation, type HiddenPiece } from './isolation.ts'
 import { disposeObjectTree } from './model-disposal.ts'
+import { type Clipping, clippingPlane, DEFAULT_CLIPPING } from './clipping.ts'
 import { buildOutline, type OutlineNode } from './outliner.ts'
 import { findPiece, namePath, pieceIdOf } from './piece-id.ts'
 import { measureModel, type ModelStats } from './model-stats.ts'
@@ -91,6 +93,8 @@ export type ModelStage = {
   clear: () => void
   resetView: () => void
   setWireframe: (enabled: boolean) => void
+  /** Cuts away one side of the model along an axis, to see what is inside it. */
+  setClipping: (clipping: Clipping) => void
   /** How the model is lit: the type of light, how strong, how bright the picture is and where the direct light comes from. */
   setLighting: (lighting: Lighting) => void
   setGuidesVisible: (visible: boolean) => void
@@ -155,6 +159,7 @@ type Shown = {
   center: Vector3
   radius: number
   materials: Material[]
+  bounds: { min: Vec3; max: Vec3 }
 }
 
 /** Vertices the precise bounds would visit, each morph target counting as another pass. */
@@ -283,6 +288,13 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
   const ambient = new AmbientLight(0xffffff, 0)
   scene.add(hemisphere, keyLight, ambient)
   let shown: Shown | null = null
+  let section: Clipping = DEFAULT_CLIPPING
+  // Why on the renderer, not each material: it then also cuts through the floor grid and the markers,
+  // which is the point of a plane through the model, and there is nothing else to keep in step.
+  const applySection = (): void => {
+    const plane = shown ? clippingPlane(section, shown.bounds) : null
+    renderer.clippingPlanes = plane ? [new Plane(new Vector3(...plane.normal), plane.constant)] : []
+  }
   // Set once the zone tint exists; the lighting below runs first and tells it when the model's materials changed.
   let syncZoneCopies: () => void = () => {}
   let lighting: Lighting = DEFAULT_LIGHTING
@@ -760,6 +772,7 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
     shown = null
     notifyHidden()
     events.onOutlineChange(null, false)
+    applySection()
     render()
   }
 
@@ -781,7 +794,15 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
         const radius = Math.max(bounds.getSize(new Vector3()).length() / 2, 1e-6)
         guides = createSceneGuides(bounds)
         animation = createSceneAnimation(model.scene, model.animations)
-        next = { model: model.scene, guides, animation, center, radius, materials: collectMaterials(model.scene) }
+        next = {
+          model: model.scene,
+          guides,
+          animation,
+          center,
+          radius,
+          materials: collectMaterials(model.scene),
+          bounds: { min: [bounds.min.x, bounds.min.y, bounds.min.z], max: [bounds.max.x, bounds.max.y, bounds.max.z] }
+        }
         // Why compile first: programs for heavy materials otherwise compile inside the first frame.
         // Without parallel compilation (software GL) compileAsync only warns, so compile directly; with
         // a lost context it would wait for a restore that may never come, so the wait is bounded.
@@ -820,6 +841,7 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
       if (!(keepView && alike)) frame(next.center, next.radius)
       if (restore) putCameraAt(restore)
       updateClipping()
+      applySection()
       render()
       const outline = buildOutline(next.model)
       events.onOutlineChange(outline.tree, outline.truncated)
@@ -847,6 +869,11 @@ export function createModelStage(host: HTMLElement, events: StageEvents): ModelS
     setLighting: (next) => {
       lighting = next
       applyLighting()
+      render()
+    },
+    setClipping: (next) => {
+      section = next
+      applySection()
       render()
     },
     setGuidesVisible: (visible) => {
