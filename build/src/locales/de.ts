@@ -74,6 +74,7 @@ export const DE: Messages = {
   resetView: 'Ansicht zurücksetzen',
   wireframe: 'Drahtgitter',
   wireframeTooLarge: 'Drahtgitter ist bei so großen Modellen nicht verfügbar',
+  uvChecker: 'UV-Prüfmuster',
   guides: 'Raster und Achsen',
   darkTheme: 'Dunkles Design',
   screenshot: 'Screenshot speichern',

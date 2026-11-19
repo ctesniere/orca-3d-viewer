@@ -73,6 +73,7 @@ export const PT: Messages = {
   resetView: 'Redefinir exibição',
   wireframe: 'Wireframe',
   wireframeTooLarge: 'Wireframe indisponível para um modelo deste tamanho',
+  uvChecker: 'Verificador de UV',
   guides: 'Grade e eixos',
   darkTheme: 'Tema escuro',
   screenshot: 'Salvar uma captura de tela',

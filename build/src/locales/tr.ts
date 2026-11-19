@@ -69,6 +69,7 @@ export const TR: Messages = {
   resetView: 'Görünümü sıfırla',
   wireframe: 'Tel kafes',
   wireframeTooLarge: 'Bu kadar büyük bir modelde tel kafes kullanılamaz',
+  uvChecker: 'UV kontrolü',
   guides: 'Izgara ve eksenler',
   darkTheme: 'Koyu tema',
   screenshot: 'Ekran görüntüsünü kaydet',

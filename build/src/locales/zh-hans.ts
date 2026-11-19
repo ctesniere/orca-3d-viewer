@@ -58,6 +58,7 @@ export const ZH_HANS: Messages = {
   resetView: '重置视图',
   wireframe: '线框',
   wireframeTooLarge: '模型过大，无法显示线框',
+  uvChecker: 'UV 检查图',
   guides: '网格和坐标轴',
   darkTheme: '深色主题',
   screenshot: '保存截图',

@@ -4,16 +4,23 @@
 import { type Clipping, clippingFrom, DEFAULT_CLIPPING } from './clipping.ts'
 import { DEFAULT_LIGHTING, type Lighting, lightingFrom } from './lighting.ts'
 
-export type ViewerPreferences = { dark: boolean; wireframe: boolean; guides: boolean; lighting: Lighting; clipping: Clipping }
+export type ViewerPreferences = { dark: boolean; wireframe: boolean; guides: boolean; uvChecker: boolean; lighting: Lighting; clipping: Clipping }
 
 const KEY = 'viewer-preferences'
-export const DEFAULT_PREFERENCES: ViewerPreferences = { dark: false, wireframe: false, guides: true, lighting: DEFAULT_LIGHTING, clipping: DEFAULT_CLIPPING }
+export const DEFAULT_PREFERENCES: ViewerPreferences = {
+  dark: false,
+  wireframe: false,
+  guides: true,
+  uvChecker: false,
+  lighting: DEFAULT_LIGHTING,
+  clipping: DEFAULT_CLIPPING
+}
 
 export function loadPreferences(): ViewerPreferences {
   try {
     const stored: unknown = JSON.parse(localStorage.getItem(KEY) ?? 'null')
     if (typeof stored !== 'object' || stored === null) return { ...DEFAULT_PREFERENCES, lighting: { ...DEFAULT_LIGHTING }, clipping: { ...DEFAULT_CLIPPING } }
-    const flag = (name: 'dark' | 'wireframe' | 'guides'): boolean => {
+    const flag = (name: 'dark' | 'wireframe' | 'guides' | 'uvChecker'): boolean => {
       const value = Object.getOwnPropertyDescriptor(stored, name)?.value
       return typeof value === 'boolean' ? value : DEFAULT_PREFERENCES[name]
     }
@@ -21,6 +28,7 @@ export function loadPreferences(): ViewerPreferences {
       dark: flag('dark'),
       wireframe: flag('wireframe'),
       guides: flag('guides'),
+      uvChecker: flag('uvChecker'),
       lighting: lightingFrom(Object.getOwnPropertyDescriptor(stored, 'lighting')?.value),
       clipping: clippingFrom(Object.getOwnPropertyDescriptor(stored, 'clipping')?.value)
     }

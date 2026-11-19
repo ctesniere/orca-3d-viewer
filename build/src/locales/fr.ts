@@ -82,6 +82,7 @@ export const FR: Messages = {
   resetView: 'Réinitialiser la vue',
   wireframe: 'Filaire',
   wireframeTooLarge: 'Mode filaire indisponible pour un modèle aussi volumineux',
+  uvChecker: 'Damier UV',
   guides: 'Grille et axes',
   darkTheme: 'Thème sombre',
   screenshot: 'Enregistrer une capture d’écran',

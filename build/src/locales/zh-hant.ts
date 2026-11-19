@@ -58,6 +58,7 @@ export const ZH_HANT: Messages = {
   resetView: '重設檢視',
   wireframe: '線框',
   wireframeTooLarge: '模型過大，無法顯示線框',
+  uvChecker: 'UV 檢查圖',
   guides: '網格與座標軸',
   darkTheme: '深色主題',
   screenshot: '儲存螢幕截圖',
